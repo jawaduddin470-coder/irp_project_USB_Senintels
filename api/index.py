@@ -2,34 +2,25 @@
 
 from __future__ import annotations
 
+from flask import request
 from usb_sentinel.web_app import create_app
 
 app = create_app()
 
 
-class VercelPathMiddleware:
-    """WSGI middleware ensuring Flask receives the original user request path on Vercel."""
+@app.route("/api/debug")
+@app.route("/debug")
+def debug_route():
+    return {
+        "PATH_INFO": request.environ.get("PATH_INFO"),
+        "SCRIPT_NAME": request.environ.get("SCRIPT_NAME"),
+        "REQUEST_URI": request.environ.get("REQUEST_URI"),
+        "RAW_URI": request.environ.get("RAW_URI"),
+        "HTTP_X_MATCHED_PATH": request.environ.get("HTTP_X_MATCHED_PATH"),
+        "HTTP_X_FORWARDED_PATH": request.environ.get("HTTP_X_FORWARDED_PATH"),
+        "headers": dict(request.headers),
+    }
 
-    def __init__(self, wsgi_app):
-        self.wsgi_app = wsgi_app
-
-    def __call__(self, environ, start_response):
-        # Inspect Vercel edge headers and WSGI environment for original URL path
-        candidate_path = (
-            environ.get("HTTP_X_MATCHED_PATH")
-            or environ.get("HTTP_X_FORWARDED_PATH")
-            or environ.get("RAW_URI")
-            or environ.get("REQUEST_URI")
-        )
-        if candidate_path:
-            path_only = candidate_path.split("?")[0]
-            if path_only and path_only != "/api/index":
-                environ["PATH_INFO"] = path_only
-
-        return self.wsgi_app(environ, start_response)
-
-
-app.wsgi_app = VercelPathMiddleware(app.wsgi_app)
 
 if __name__ == "__main__":
     app.run()
