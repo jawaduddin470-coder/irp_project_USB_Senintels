@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-text">
+        <h1>Security Dashboard & Telemetry Overview</h1>
+        <p>Continuous hardware telemetry, static threat detection, and encrypted quarantine vault status.</p>
+    </div>
+    <div class="page-header-actions">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Refresh Telemetry
+        </a>
+    </div>
+</div>
+
+{% if flagged_count and flagged_count > 0 %}
+<div class="alert-banner warning" style="justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <div>
+            <strong>Potential Threats Flagged:</strong> 
+            The latest scan identified {{ flagged_count }} suspicious or high-risk file(s). Review findings before mounting for execution.
+        </div>
+    </div>
+    <a href="{{ url_for('devices') }}" class="btn btn-sm btn-primary">Review Flagged Files</a>
+</div>
+{% endif %}
+
+<!-- Key Metrics Grid -->
+<div class="metrics-grid">
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-label">Watchdog Engine</span>
+            <div class="metric-icon-wrap {% if watchdog_running %}metric-icon-green{% else %}metric-icon-slate{% endif %}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+            </div>
+        </div>
+        <div class="metric-value">
+            {% if watchdog_running %}
+                <span class="badge badge-success" style="font-size: 13px;">RUNNING</span>
+            {% else %}
+                <span class="badge badge-neutral" style="font-size: 13px;">STOPPED</span>
+            {% endif %}
+        </div>
+        <div class="metric-subtext">Real-time hardware listener</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-label">Detected USBs</span>
+            <div class="metric-icon-wrap metric-icon-blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                    <line x1="6" y1="6" x2="6.01" y2="6"/>
+                    <line x1="6" y1="18" x2="6.01" y2="18"/>
+                </svg>
+            </div>
+        </div>
+        <div class="metric-value">{{ usb_devices|length }}</div>
+        <div class="metric-subtext">Active USB mass storage mounts</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-label">Files Inspected</span>
+            <div class="metric-icon-wrap metric-icon-blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                </svg>
+            </div>
+        </div>
+        <div class="metric-value">{{ inspected_count }}</div>
+        <div class="metric-subtext">Evaluated in last scan session</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-label">Flagged Threats</span>
+            <div class="metric-icon-wrap {% if flagged_count > 0 %}metric-icon-red{% else %}metric-icon-green{% endif %}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                </svg>
+            </div>
+        </div>
+        <div class="metric-value" style="{% if flagged_count > 0 %}color: var(--status-critical);{% endif %}">
+            {{ flagged_count }}
+        </div>
+        <div class="metric-subtext">High risk or suspicious heuristics</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-label">Quarantined Vault</span>
+            <div class="metric-icon-wrap metric-icon-slate">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+            </div>
+        </div>
+        <div class="metric-value">{{ quarantine_count }}</div>
+        <div class="metric-subtext">Isolated in AES-256-GCM vault</div>
+    </div>
+</div>
+
+<!-- Two-Column Primary Grid -->
+<div class="grid-2col">
+    <!-- Left Column: Connected Storage Telemetry -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-title-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                    <line x1="10" y1="2" x2="14" y2="2"/>
+                    <line x1="12" y1="2" x2="12" y2="8"/>
+                    <circle cx="12" cy="10" r="2"/>
+                    <path d="M6 14v4a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-4"/>
+                    <path d="M4 14h16"/>
+                </svg>
+                <div>
+                    <h2 class="panel-title">Connected Mass Storage &amp; Mounts</h2>
+                    <div class="panel-subtitle">Hardware telemetry and device classifications</div>
+                </div>
+            </div>
+            <a href="{{ url_for('devices') }}" class="btn btn-secondary btn-sm">Inspect All &rarr;</a>
+        </div>
+
+        {% if usb_devices %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Mount Path</th>
+                        <th>Volume Label</th>
+                        <th>File System</th>
+                        <th>Bus Type</th>
+                        <th>Classification</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for dev in usb_devices %}
+                    <tr>
+                        <td class="mono"><strong>{{ dev.mount_point or dev.device_path }}</strong></td>
+                        <td>{{ dev.volume_label or '(No Label)' }}</td>
+                        <td><span class="badge badge-neutral">{{ dev.file_system or 'Unknown' }}</span></td>
+                        <td><span class="badge badge-info">{{ dev.bus_type }}</span></td>
+                        <td>
+                            <span class="badge badge-{% if dev.classification == 'USB_MASS_STORAGE' %}success{% else %}warning{% endif %}">
+                                {{ dev.classification }}
+                            </span>
+                        </td>
+                        <td>
+                            <form method="POST" action="{{ url_for('scan_device') }}" style="display:inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="target_path" value="{{ dev.mount_point or dev.device_path }}">
+                                <button type="submit" class="btn btn-primary btn-sm">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                    Inspect &amp; Scan
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                </svg>
+            </div>
+            <div class="empty-state-title">No USB Mass Storage Devices Detected</div>
+            <div class="empty-state-desc">Insert a USB flash drive or external disk to begin real-time telemetry monitoring, or scan a directory manually.</div>
+            <div style="margin-top: 10px;">
+                <a href="{{ url_for('devices') }}" class="btn btn-secondary btn-sm">Open Scanner Console</a>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if last_scan_info %}
+        <div class="panel-footer">
+            <span class="mono" style="font-size: 11px; color: var(--text-secondary);">
+                Last Evaluated Target: <strong>{{ last_scan_info.target_path }}</strong>
+            </span>
+            <span class="badge badge-neutral">{{ last_scan_info.status }}</span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Right Column: Recent Audit Events -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-title-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                </svg>
+                <div>
+                    <h2 class="panel-title">Recent Security Audit Events</h2>
+                    <div class="panel-subtitle">Append-only cryptographic transaction log</div>
+                </div>
+            </div>
+            <a href="{{ url_for('logs_view') }}" class="btn btn-secondary btn-sm">Full Ledger &rarr;</a>
+        </div>
+
+        {% if recent_events %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp (UTC)</th>
+                        <th>Event Type</th>
+                        <th>Target / Source</th>
+                        <th>Outcome</th>
+                        <th>Actor</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in recent_events %}
+                    <tr>
+                        <td class="mono" style="font-size: 11px;">{{ event.timestamp }}</td>
+                        <td><span class="badge badge-neutral">{{ event.event_type }}</span></td>
+                        <td class="mono" style="font-size: 11px;" title="{{ event.target_path or event.source_path or '' }}">
+                            {{ (event.target_path or event.source_path or '—')|truncate(30) }}
+                        </td>
+                        <td>
+                            <span class="badge badge-{% if event.outcome in ['SUCCESS', 'SCANNED', 'VERIFIED'] %}success{% elif event.outcome in ['FLAGGED', 'SUSPICIOUS'] %}warning{% elif event.outcome in ['FAILURE', 'ERROR', 'INTEGRITY_MISMATCH'] %}critical{% else %}neutral{% endif %}">
+                                {{ event.outcome }}
+                            </span>
+                        </td>
+                        <td><span class="badge badge-neutral">{{ event.actor }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+            </div>
+            <div class="empty-state-title">No Events Recorded</div>
+            <div class="empty-state-desc">The audit ledger is currently empty. Actions taken in the system will automatically be appended here.</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

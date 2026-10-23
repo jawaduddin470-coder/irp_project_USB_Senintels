@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block title %}USB Devices & Scanner{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-text">
+        <h1>USB Devices & Threat Scanner</h1>
+        <p>Inspect active system mounts, evaluate storage bus classifications, and execute static heuristic malware scans.</p>
+    </div>
+    <div class="page-header-actions">
+        <a href="{{ url_for('devices') }}" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Refresh Devices
+        </a>
+    </div>
+</div>
+
+<div class="policy-banner" style="border-left-color: #6366F1;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: #6366F1; flex-shrink: 0; margin-top: 1px;">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="16" x2="12" y2="12"></line>
+        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+    </svg>
+    <div>
+        <strong>Heuristic Analysis Disclaimer:</strong>
+        All file risk scores, entropy evaluations, and classifications are calculated using safe static heuristics (autorun signatures, suspicious script patterns, double extensions, high entropy sections). Automated detection never alters files. Quarantine requires explicit confirmation.
+    </div>
+</div>
+
+<!-- Active Mounts & Storage Telemetry Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <div class="panel-title-group">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                <line x1="10" y1="2" x2="14" y2="2"/>
+                <line x1="12" y1="2" x2="12" y2="8"/>
+                <circle cx="12" cy="10" r="2"/>
+                <path d="M6 14v4a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-4"/>
+                <path d="M4 14h16"/>
+            </svg>
+            <div>
+                <h2 class="panel-title">Active Mounts &amp; Storage Telemetry</h2>
+                <div class="panel-subtitle">Enumerate storage volumes and classify hardware bus connections</div>
+            </div>
+        </div>
+    </div>
+
+    {% if devices_list %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Mount Point</th>
+                    <th>Volume Label</th>
+                    <th>File System</th>
+                    <th>Bus Type</th>
+                    <th>Classification</th>
+                    <th>Total Capacity</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for dev in devices_list %}
+                <tr>
+                    <td class="mono"><strong>{{ dev.mount_point or dev.device_path }}</strong></td>
+                    <td>{{ dev.volume_label or '(No Label)' }}</td>
+                    <td><span class="badge badge-neutral">{{ dev.file_system or 'Unknown' }}</span></td>
+                    <td><span class="badge badge-info">{{ dev.bus_type }}</span></td>
+                    <td>
+                        <span class="badge badge-{% if dev.classification == 'USB_MASS_STORAGE' %}success{% elif dev.classification == 'INTERNAL_FIXED_DRIVE' %}neutral{% else %}warning{% endif %}">
+                            {{ dev.classification }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if dev.total_size_bytes %}
+                            {{ (dev.total_size_bytes / (1024 * 1024 * 1024))|round(2) }} GB
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="POST" action="{{ url_for('scan_device') }}" style="display:inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="target_path" value="{{ dev.mount_point or dev.device_path }}">
+                            <button type="submit" class="btn btn-primary btn-sm">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                Scan Volume
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            </svg>
+        </div>
+        <div class="empty-state-title">No Storage Devices Found</div>
+        <div class="empty-state-desc">No active system mounts or USB storage devices were enumerated. You may scan a local directory below.</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- On-Demand Path Scanner Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <div class="panel-title-group">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <div>
+                <h2 class="panel-title">On-Demand Path Scanner</h2>
+                <div class="panel-subtitle">Target specific local folders, flash drives, or forensic disk images</div>
+            </div>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form method="POST" action="{{ url_for('scan_device') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label class="form-label" for="target_path">Target Directory or Drive Root</label>
+                <div class="form-row">
+                    <input type="text" id="target_path" name="target_path" class="form-control mono" 
+                           placeholder="e.g. E:\ or /Volumes/FlashDrive or /tmp/test_usb" required>
+                    <button type="submit" class="btn btn-primary" style="white-space: nowrap;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Start Heuristic Scan
+                    </button>
+                </div>
+                <div class="form-label-desc">Specify an absolute directory path. Recursive evaluation inspects autorun entries, binaries, scripts, and entropy anomalies.</div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if is_scanning %}
+<div class="alert-banner info">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </svg>
+    <span><strong>Scan in Progress:</strong> A background scan is currently analyzing files. Please refresh this page shortly to view the latest results.</span>
+</div>
+{% endif %}
+
+<!-- Threat Scan Results -->
+{% if scan_report %}
+<div class="panel">
+    <div class="panel-header">
+        <div class="panel-title-group">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                <line x1="18" y1="20" x2="18" y2="10"/>
+                <line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            <div>
+                <h2 class="panel-title">Threat Scan Results</h2>
+                <div class="panel-subtitle">Evaluated on {{ scan_report.timestamp }} UTC</div>
+            </div>
+        </div>
+        <span class="badge badge-neutral mono">{{ scan_report.target_path }}</span>
+    </div>
+
+    <!-- Scan KPI Bar -->
+    <div class="panel-body" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Files Inspected</span>
+                    <div class="metric-icon-wrap metric-icon-blue">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+                    </div>
+                </div>
+                <div class="metric-value">{{ scan_report.files_scanned }}</div>
+                <div class="metric-subtext">Total objects evaluated</div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Flagged Threats</span>
+                    <div class="metric-icon-wrap {% if scan_report.flagged_count > 0 %}metric-icon-red{% else %}metric-icon-green{% endif %}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+                    </div>
+                </div>
+                <div class="metric-value" style="{% if scan_report.flagged_count > 0 %}color: var(--status-critical);{% endif %}">
+                    {{ scan_report.flagged_count }}
+                </div>
+                <div class="metric-subtext">Suspicious or malicious findings</div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Scan Duration</span>
+                    <div class="metric-icon-wrap metric-icon-slate">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    </div>
+                </div>
+                <div class="metric-value">{{ scan_report.duration_seconds|round(2) }}s</div>
+                <div class="metric-subtext">Wall-clock processing time</div>
+            </div>
+        </div>
+    </div>
+
+    {% if scan_report.flagged_files %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>File Name</th>
+                    <th>Location</th>
+                    <th>Size</th>
+                    <th>Risk Score</th>
+                    <th>Classification</th>
+                    <th>Indicators</th>
+                    <th>SHA-256</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for file in scan_report.flagged_files %}
+                <tr>
+                    <td><strong>{{ file.file_name }}</strong></td>
+                    <td class="mono" style="font-size: 11px;" title="{{ file.file_path }}">
+                        {{ file.file_path|truncate(35) }}
+                    </td>
+                    <td>{{ (file.file_size / 1024)|round(1) }} KB</td>
+                    <td>
+                        <span class="badge badge-{% if file.risk_score >= 80 %}critical{% elif file.risk_score >= 50 %}warning{% else %}neutral{% endif %}">
+                            {{ file.risk_score }}/100
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge badge-{% if file.classification == 'MALICIOUS' %}critical{% elif file.classification == 'SUSPICIOUS' %}warning{% else %}neutral{% endif %}">
+                            {{ file.classification }}
+                        </span>
+                    </td>
+                    <td style="font-size: 12px;">
+                        {% for r in file.reasons %}
+                            <div>&bull; {{ r }}</div>
+                        {% else %}
+                            <em>No specific reasons</em>
+                        {% endfor %}
+                    </td>
+                    <td class="mono" style="font-size: 10px;" title="{{ file.sha256 }}">
+                        {{ file.sha256[:12] }}...
+                    </td>
+                    <td>
+                        <form method="POST" action="{{ url_for('quarantine_file_action') }}" onsubmit="return confirm('Quarantine {{ file.file_name }}? It will be encrypted into the vault and safely removed from the source volume.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="target_path" value="{{ file.file_path }}">
+                            <input type="hidden" name="expected_sha256" value="{{ file.sha256 }}">
+                            <input type="hidden" name="confirmed" value="yes">
+                            <button type="submit" class="btn btn-danger btn-sm">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                Quarantine
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon" style="background-color: var(--status-success-bg); color: var(--status-success);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+        </div>
+        <div class="empty-state-title" style="color: var(--status-success);">Clean Volume — No Threats Detected</div>
+        <div class="empty-state-desc">All {{ scan_report.files_scanned }} evaluated file(s) met normal benign heuristics without suspicious indicators.</div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

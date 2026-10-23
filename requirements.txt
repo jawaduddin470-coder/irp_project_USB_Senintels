@@ -1,0 +1,25 @@
+# Automated USB Mass Storage Threat Detection & File Quarantine Watchdog
+# Phase 2: File Scanner & Heuristic Risk Assessment Dependencies
+#
+# Target Supported Python Versions: 3.10, 3.11, 3.12, 3.13 (per PROJECT_PLAN.md)
+# Current Development Host Environment: Python 3.14.2 (macOS / Darwin)
+# Target Deployment: Windows 10 (1809+), Windows 11, Windows Server 2019/2022
+
+# --- Core CLI Formatting (Cross-Platform) ---
+colorama>=0.4.6,<0.5.0
+
+# --- Windows Platform Telemetry & Native Bindings (Windows Target Only) ---
+# Note: These dependencies are activated only on Windows platforms via PEP 508 markers.
+# They will not be installed or required on macOS/Linux development hosts.
+pywin32>=306; sys_platform == 'win32'
+wmi>=1.5.1; sys_platform == 'win32'
+
+# --- Authenticated Streaming Cryptography (Cross-Platform) ---
+cryptography>=41.0.0
+
+# --- Web Dashboard Interface ---
+flask>=3.0.0
+
+# --- Testing & Test Automation Tooling ---
+pytest>=7.4.0,<10.0.0
+pytest-mock>=3.11.0,<4.0.0

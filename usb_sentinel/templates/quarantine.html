@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+
+{% block title %}Quarantine Vault &amp; Restoration{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-text">
+        <h1>Encrypted Quarantine Vault &amp; Safe Restoration</h1>
+        <p>Cryptographically isolated threat storage using AES-256-GCM authenticated encryption and tamper-evident metadata.</p>
+    </div>
+    <div class="page-header-actions">
+        <a href="{{ url_for('quarantine_view') }}" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Refresh Vault Index
+        </a>
+    </div>
+</div>
+
+<div class="policy-banner" style="border-left-color: #DC2626;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: #DC2626; flex-shrink: 0; margin-top: 1px;">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+    <div>
+        <strong>Restoration &amp; Quarantine Security Protocols:</strong>
+        Quarantine re-hashes the source file immediately prior to deletion to ensure zero data race or file tampering. Safe restoration validates the GCM authentication tag, cross-checks destination boundaries against directory traversal attacks, and verifies cryptographic integrity before finalizing the target file.
+    </div>
+</div>
+
+<!-- Forensic Record Inspection Panel (if active) -->
+{% if inspect_record %}
+<div class="panel">
+    <div class="panel-header">
+        <div class="panel-title-group">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <div>
+                <h2 class="panel-title">Quarantine Record Details: <span class="mono">{{ inspect_record.quarantine_id }}</span></h2>
+                <div class="panel-subtitle">Cryptographic metadata and forensic integrity record</div>
+            </div>
+        </div>
+        <a href="{{ url_for('quarantine_view') }}" class="btn btn-secondary btn-sm">&times; Close Inspection</a>
+    </div>
+
+    <div class="panel-body">
+        <div class="meta-grid">
+            <div class="meta-item">
+                <span class="meta-label">Quarantine ID</span>
+                <span class="meta-value mono text-break">{{ inspect_record.quarantine_id }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Original File Path</span>
+                <span class="meta-value mono text-break">{{ inspect_record.original_path }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Vault Object ID</span>
+                <span class="meta-value mono text-break">{{ inspect_record.vault_id }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Original File Size</span>
+                <span class="meta-value">{{ inspect_record.file_size_bytes }} bytes ({{ (inspect_record.file_size_bytes / 1024)|round(2) }} KB)</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Quarantine Timestamp</span>
+                <span class="meta-value mono">{{ inspect_record.quarantined_at }} UTC</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Verified SHA-256 Hash</span>
+                <span class="meta-value mono text-break" style="font-size: 11px;">{{ inspect_record.source_sha256 }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Heuristic Risk Score</span>
+                <div class="meta-value">
+                    <span class="badge badge-{% if inspect_record.risk_score >= 80 %}critical{% elif inspect_record.risk_score >= 50 %}warning{% else %}neutral{% endif %}">
+                        {{ inspect_record.risk_score }}/100
+                    </span>
+                    <span class="badge badge-neutral" style="margin-left: 6px;">{{ inspect_record.classification }}</span>
+                </div>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Encryption Algorithm</span>
+                <span class="meta-value mono">AES-256-GCM (Authenticated Streaming Chunking)</span>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-color-subtle);">
+            <div class="meta-label">Quarantine Rationale</div>
+            <div style="margin-top: 6px; font-size: 13px;">
+                {% if inspect_record.detection_reasons %}
+                    {% for r in inspect_record.detection_reasons %}
+                        <div>&bull; {{ r }}</div>
+                    {% endfor %}
+                {% else %}
+                    <em>Manual operator quarantine</em>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Vault Records Table Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <div class="panel-title-group">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <div>
+                <h2 class="panel-title">Vault Records ({{ records|length }})</h2>
+                <div class="panel-subtitle">Authenticated ciphertext objects stored under DPAPI / Protected Key</div>
+            </div>
+        </div>
+    </div>
+
+    {% if records %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Quarantine ID</th>
+                    <th>Original Filename</th>
+                    <th>Quarantined At (UTC)</th>
+                    <th>File Size</th>
+                    <th>Risk</th>
+                    <th>Vault ID</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in records %}
+                <tr>
+                    <td class="mono" style="font-size: 11px;"><strong>{{ r.quarantine_id[:12] }}...</strong></td>
+                    <td><strong>{{ r.original_path.split('\\')[-1].split('/')[-1] }}</strong></td>
+                    <td class="mono" style="font-size: 11px;">{{ r.quarantined_at[:19] }}</td>
+                    <td>{{ (r.file_size_bytes / 1024)|round(1) }} KB</td>
+                    <td>
+                        <span class="badge badge-{% if r.risk_score >= 80 %}critical{% elif r.risk_score >= 50 %}warning{% else %}neutral{% endif %}">
+                            {{ r.risk_score }}/100
+                        </span>
+                    </td>
+                    <td class="mono" style="font-size: 10px;" title="{{ r.vault_id }}">{{ r.vault_id[:10] }}...</td>
+                    <td>
+                        <div style="display: flex; gap: 6px;">
+                            <a href="{{ url_for('quarantine_view', inspect=r.quarantine_id) }}" class="btn btn-secondary btn-sm">Inspect</a>
+                            <a href="{{ url_for('quarantine_view', restore_id=r.quarantine_id) }}#restore-form" class="btn btn-primary btn-sm">Restore</a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+        </div>
+        <div class="empty-state-title">Quarantine Vault is Empty</div>
+        <div class="empty-state-desc">No files are currently stored in the encrypted quarantine vault. Flagged files from scans can be quarantined with manual authorization.</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Two-Column Form Grid: Safe Restoration & Manual Quarantine -->
+<div class="grid-2col">
+    <!-- Safe File Restoration -->
+    <div class="panel" id="restore-form">
+        <div class="panel-header">
+            <div class="panel-title-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--primary-blue);">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <polyline points="9 12 11 14 15 10"/>
+                </svg>
+                <div>
+                    <h2 class="panel-title">Safe File Restoration</h2>
+                    <div class="panel-subtitle">Authenticated decryption with destination boundary check</div>
+                </div>
+            </div>
+        </div>
+
+        {% if records %}
+        <div class="panel-body">
+            <form method="POST" action="{{ url_for('restore_file_action') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                <div class="form-group">
+                    <label class="form-label" for="quarantine_id">Select Vault Record to Restore</label>
+                    <select name="quarantine_id" id="quarantine_id" class="form-control mono" required>
+                        {% for r in records %}
+                        <option value="{{ r.quarantine_id }}" {% if target_restore_id == r.quarantine_id %}selected{% endif %}>
+                            {{ r.original_path.split('\\')[-1].split('/')[-1] }} (ID: {{ r.quarantine_id[:8] }}...) - {{ r.quarantined_at[:10] }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Restoration Target Destination</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+                        <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+                            <input type="radio" name="dest_mode" id="dest_desktop" value="DESKTOP" checked style="margin-top: 3px;">
+                            <span><strong>Isolated Restore Folder</strong> (Recommended &mdash; ~/Desktop/USB_Sentinel_Restored)</span>
+                        </label>
+                        <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+                            <input type="radio" name="dest_mode" id="dest_original" value="ORIGINAL" style="margin-top: 3px;">
+                            <span><strong>Original Location</strong> (Restores back to exact source file path)</span>
+                        </label>
+                        <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+                            <input type="radio" name="dest_mode" id="dest_custom" value="CUSTOM" style="margin-top: 3px;">
+                            <span><strong>Custom Directory</strong> (Specify folder path below)</span>
+                        </label>
+                    </div>
+                    <div style="margin-top: 8px;">
+                        <input type="text" name="custom_path" class="form-control mono" placeholder="Custom destination folder path (used only if Custom is selected)">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="collision_policy">Collision Resolution Policy</label>
+                    <select name="collision_policy" id="collision_policy" class="form-control">
+                        <option value="REJECT" selected>REJECT &mdash; Abort if target file already exists (Safest)</option>
+                        <option value="RENAME_NEW">RENAME_NEW &mdash; Save with numeric suffix (e.g. file (1).ext)</option>
+                        <option value="OVERWRITE">OVERWRITE &mdash; Overwrite existing target file (Destructive)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" name="confirmed" id="confirm_restore" value="yes" required style="margin-top: 3px;">
+                        <span><strong>Confirm Restoration:</strong> I verify this restoration is authorized and understand the decrypted file will be written to disk.</span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="margin-top: 6px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                    Verify Integrity &amp; Decrypt to Target
+                </button>
+            </form>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-title">No Records Available for Restoration</div>
+            <div class="empty-state-desc">There are currently no items in the vault to restore.</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Manual File Quarantine -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-title-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--status-critical);">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                <div>
+                    <h2 class="panel-title">Manual File Quarantine</h2>
+                    <div class="panel-subtitle">Immediate AES-256-GCM encryption with atomic source removal</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-body">
+            <form method="POST" action="{{ url_for('quarantine_file_action') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                <div class="form-group">
+                    <label class="form-label" for="manual_target_path">Absolute File Path to Quarantine</label>
+                    <input type="text" id="manual_target_path" name="target_path" class="form-control mono" 
+                           placeholder="e.g. E:\autorun.inf or /tmp/suspicious_payload.exe" required>
+                    <div class="form-label-desc">Specify full path. Re-hashed prior to isolation to prevent TOCTOU race conditions.</div>
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" name="confirmed" id="confirm_manual_quarantine" value="yes" required style="margin-top: 3px;">
+                        <span><strong>Confirm Quarantine:</strong> Encrypt this file into the AES-256-GCM vault and safely delete the original source file.</span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-danger" style="margin-top: 6px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Encrypt &amp; Quarantine File
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
