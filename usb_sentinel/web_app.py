@@ -492,6 +492,23 @@ def create_app(
 
     # --- Core Routes ---
 
+    @app.route("/static/<path:filename>")
+    def serve_custom_static(filename: str):
+        """Robust static file delivery supporting local, serverless, and container environments."""
+        candidate_dirs = [
+            Path(__file__).parent / "static",
+            Path(__file__).parent.parent / "static",
+            Path(__file__).parent.parent / "public" / "static",
+            Path("/var/task/usb_sentinel/static"),
+            Path("/var/task/static"),
+            Path("/var/task/public/static"),
+        ]
+        for cdir in candidate_dirs:
+            target = cdir / filename
+            if target.is_file():
+                return send_from_directory(str(cdir), filename)
+        abort(404)
+
     @app.route("/")
     def index():
         """Redirect root URL to Dashboard."""
