@@ -510,6 +510,7 @@ def create_app(
         abort(404)
 
     @app.route("/")
+    @app.route("/api/index")
     def index():
         """Redirect root URL to Dashboard."""
         return redirect(url_for("dashboard"))
