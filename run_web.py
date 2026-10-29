@@ -9,7 +9,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+# Self-bootstrap virtual environment if executed with an interpreter lacking dependencies
+_venv_python = Path(__file__).parent / ".venv" / "bin" / "python"
+if _venv_python.exists() and sys.executable != str(_venv_python.resolve()):
+    try:
+        import flask  # noqa: F401
+    except ImportError:
+        os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
 
 from usb_sentinel.web_app import run_web
 
