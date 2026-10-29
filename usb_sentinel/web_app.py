@@ -21,6 +21,7 @@ Key Architecture & Safety Controls:
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import secrets
 import sys
@@ -31,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 from flask import (
     Flask,
@@ -430,6 +433,29 @@ def create_app(
             session["csrf_token"] = secrets.token_hex(32)
         return {"csrf_token": lambda: session["csrf_token"]}
 
+    @app.context_processor
+    def inject_environment_context():
+        """Inject server environment context for explicit cloud preview vs local host badging."""
+        # Detect Vercel / serverless cloud execution
+        is_cloud = bool(
+            os.environ.get("VERCEL")
+            or os.environ.get("VERCEL_ENV")
+            or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+            or (request and request.host and "vercel.app" in request.host)
+        )
+        if is_cloud:
+            badge_label = "CLOUD PREVIEW"
+            host_info = "Vercel Serverless"
+        else:
+            badge_label = "LOCAL HOST"
+            host_info = request.host if (request and request.host) else "127.0.0.1:5000"
+
+        return {
+            "is_cloud_preview": is_cloud,
+            "env_badge_label": badge_label,
+            "env_host_info": host_info,
+        }
+
     @app.before_request
     def verify_csrf():
         """Verify CSRF token on all modifying HTTP requests."""
@@ -517,7 +543,9 @@ def create_app(
     @app.route("/dashboard")
     def dashboard():
         """Dashboard overview: watchdog status, detected USBs, inspection stats, recent audit events."""
-        # 1. Enumerate storage devices and filter USB
+        detection_error: Optional[str] = None
+        adapted_volumes: list[DeviceTelemetryViewModel] = []
+        # 1. Enumerate storage devices and filter USB / Removable media
         try:
             volumes = hub.detector.get_mounted_volumes()
             adapted_volumes = [adapt_telemetry(v) for v in volumes]
@@ -525,10 +553,15 @@ def create_app(
                 v
                 for v in adapted_volumes
                 if v.bus_type.upper() == "USB"
-                or v.classification == DeviceClassification.USB_MASS_STORAGE.value
+                or v.classification in (
+                    DeviceClassification.USB_MASS_STORAGE.value,
+                    DeviceClassification.UNKNOWN_REMOVABLE.value,
+                )
             ]
-        except Exception:
+        except Exception as exc:
+            logger.error("Device detection failed on dashboard: %s", exc, exc_info=True)
             usb_devices = []
+            detection_error = f"Device detection failed: {exc}"
 
         # 2. Watchdog status
         wd_running = hub.watchdog.state == WatchdogState.RUNNING
@@ -572,15 +605,20 @@ def create_app(
             quarantine_count=quarantine_count,
             recent_events=recent_events,
             last_scan_info=last_scan_info,
+            detection_error=detection_error,
         )
 
     @app.route("/devices")
     def devices():
         """USB Devices & Threat Scanner view: active mounts and scan results."""
+        detection_error: Optional[str] = None
+        devices_list: list[DeviceTelemetryViewModel] = []
         try:
             volumes = hub.detector.get_mounted_volumes()
             devices_list = [adapt_telemetry(v) for v in volumes]
-        except Exception:
+        except Exception as exc:
+            logger.error("Storage device detection failed on devices page: %s", exc, exc_info=True)
+            detection_error = f"Storage device enumeration failed: {exc}"
             devices_list = []
 
         is_scanning = hub.scan_worker.is_running
@@ -635,6 +673,7 @@ def create_app(
             devices_list=devices_list,
             is_scanning=is_scanning,
             scan_report=scan_report_view,
+            detection_error=detection_error,
         )
 
     @app.route("/devices/scan", methods=["POST"])
@@ -870,6 +909,7 @@ def create_app(
         search_query = request.args.get("search", "").strip()
 
         # 1. Read and optionally filter audit events
+        ledger_error: Optional[str] = None
         try:
             raw_events = hub.audit_ledger.read_all_events()
             filtered_events = raw_events
@@ -893,7 +933,9 @@ def create_app(
             events = [adapt_audit_event(ev) for ev in reversed(filtered_events[-100:])]
             total_count = len(raw_events)
             filtered_count = len(filtered_events)
-        except Exception:
+        except Exception as exc:
+            logger.error("Audit ledger read error: %s", exc, exc_info=True)
+            ledger_error = f"Audit ledger read failed: {exc}"
             events = []
             total_count = 0
             filtered_count = 0
@@ -938,6 +980,7 @@ def create_app(
             },
             total_count=total_count,
             filtered_count=filtered_count,
+            ledger_error=ledger_error,
         )
 
     @app.route("/logs/export")

@@ -31,6 +31,20 @@
     </div>
 </div>
 
+{% if ledger_error %}
+<div class="policy-banner" style="border-left-color: #EF4444; background: #FEF2F2; border-color: #FECACA; margin-bottom: 20px;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+    <div>
+        <strong style="color: #991B1B;">Audit Ledger Warning:</strong>
+        <span style="color: #B91C1C;">{{ ledger_error }}</span>
+    </div>
+</div>
+{% endif %}
+
 <!-- Audit Log Filtering Bar (Server-Side Form) -->
 <form method="GET" action="{{ url_for('logs_view') }}" class="filter-bar">
     <div class="filter-group">

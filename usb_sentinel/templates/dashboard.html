@@ -16,6 +16,38 @@
     </div>
 </div>
 
+{% if is_cloud_preview %}
+<div class="policy-banner" style="border-left-color: #F59E0B; background: #FFFBEB; border-color: #FDE68A; margin-bottom: 20px;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+    <div>
+        <strong style="color: #92400E;">Cloud Preview Notice:</strong>
+        <span style="color: #B45309;">
+            Running on Vercel Cloud Serverless. To monitor physical USB pen drives connected to your Mac, run locally via:
+        </span>
+        <code style="background: #FEF3C7; color: #92400E; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-left: 4px;">python3 run_web.py</code>
+        <span style="color: #92400E; margin-left: 6px;">(http://127.0.0.1:5000)</span>
+    </div>
+</div>
+{% endif %}
+
+{% if detection_error %}
+<div class="policy-banner" style="border-left-color: #EF4444; background: #FEF2F2; border-color: #FECACA; margin-bottom: 20px;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+    <div>
+        <strong style="color: #991B1B;">Device Enumeration Warning:</strong>
+        <span style="color: #B91C1C;">{{ detection_error }}</span>
+    </div>
+</div>
+{% endif %}
+
 {% if flagged_count and flagged_count > 0 %}
 <div class="alert-banner warning" style="justify-content: space-between;">
     <div style="display: flex; align-items: center; gap: 10px;">

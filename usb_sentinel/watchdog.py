@@ -50,6 +50,7 @@ from usb_sentinel.device_detection import (
     RawDeviceEvent,
     UnsupportedPlatformDetector,
     WindowsDeviceDetector,
+    get_device_detector,
     normalize_drive_letter,
 )
 from usb_sentinel.models import (
@@ -133,12 +134,7 @@ class USBWatchdog:
         self._audit_ledger = audit_ledger or AuditLedger(config=self._config)
         self._scanner = scanner or VolumeScanner(config=self._config)
 
-        if detector is not None:
-            self._detector = detector
-        elif sys.platform == "win32":
-            self._detector = WindowsDeviceDetector(config=self._config)
-        else:
-            self._detector = UnsupportedPlatformDetector(config=self._config)
+        self._detector = detector or get_device_detector(self._config)
 
         self._on_device_arrival = on_device_arrival
         self._on_device_removal = on_device_removal

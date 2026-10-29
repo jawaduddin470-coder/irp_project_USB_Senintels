@@ -29,9 +29,12 @@ from __future__ import annotations
 import abc
 import ctypes
 import os
+import plistlib
 import shutil
+import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -97,13 +100,15 @@ class RawDeviceEvent:
 
 
 def normalize_drive_letter(drive_str: str) -> str:
-    """Normalize a drive letter representation to standard uppercase 'X:' format.
+    """Normalize a drive letter representation to standard uppercase 'X:' format,
+    while preserving POSIX mount paths like '/Volumes/NO NAME'.
 
     Examples:
         'e' -> 'E:'
         'E:' -> 'E:'
         'E:\\' -> 'E:'
         '\\\\?\\E:\\' -> 'E:'
+        '/Volumes/NO NAME' -> '/Volumes/NO NAME'
     """
     cleaned = drive_str.strip()
     if cleaned.startswith("\\\\?\\"):
@@ -114,6 +119,9 @@ def normalize_drive_letter(drive_str: str) -> str:
         return f"{cleaned[0].upper()}:"
     if len(cleaned) == 1 and cleaned.isalpha():
         return f"{cleaned.upper()}:"
+    if cleaned.startswith("/"):
+        # POSIX mount paths (e.g. /Volumes/NO NAME)
+        return cleaned.rstrip("/") if len(cleaned) > 1 else "/"
     return cleaned.upper()
 
 
@@ -130,6 +138,8 @@ def normalize_mount_point(drive_or_path: str) -> str:
         return f"{cleaned.upper()}:\\"
     if len(cleaned) >= 3 and cleaned[1] == ":" and cleaned[2] == "\\":
         return f"{cleaned[0].upper()}:\\"
+    if cleaned.startswith("/"):
+        return cleaned.rstrip("/") if len(cleaned) > 1 else "/"
     return cleaned
 
 
@@ -650,6 +660,313 @@ class WindowsDeviceDetector(BaseDeviceDetector):
         self._monitoring = False
 
 
+class MacOSDeviceDetector(BaseDeviceDetector):
+    """macOS-native storage device detector using diskutil and POSIX filesystem inspection.
+
+    Provides hardware-level storage volume enumeration, classification, and event monitoring
+    on macOS systems without requiring root/sudo privileges.
+    """
+
+    def __init__(
+        self,
+        config: Optional[SentinelConfig] = None,
+        poll_interval: float = 1.0,
+    ) -> None:
+        self._config = config or get_config()
+        self._poll_interval = poll_interval
+        self._monitoring = False
+        self._stop_event = threading.Event()
+        self._monitor_thread: Optional[threading.Thread] = None
+        self._callback: Optional[Callable[[RawDeviceEvent], None]] = None
+        self._lock = threading.RLock()
+        self._simulated_volumes: dict[str, DeviceTelemetry] = {}
+        self._known_volumes: set[str] = set()
+
+    @property
+    def is_monitoring(self) -> bool:
+        with self._lock:
+            return self._monitoring
+
+    def get_mounted_volumes(self) -> list[DeviceTelemetry]:
+        """Enumerate mounted storage volumes on macOS.
+
+        Inspects the standard `/Volumes` mount directory, querying diskutil for detailed
+        hardware bus information, filesystem label, and capacity. Prioritizes USB mass
+        storage devices.
+        """
+        results: list[DeviceTelemetry] = []
+        with self._lock:
+            results.extend(self._simulated_volumes.values())
+
+        volumes_dir = Path("/Volumes")
+        if volumes_dir.is_dir():
+            try:
+                for entry in sorted(os.scandir(volumes_dir), key=lambda e: e.name.lower()):
+                    if entry.name.startswith("."):
+                        continue
+                    telemetry = self.get_volume_telemetry(entry.path)
+                    if telemetry is not None:
+                        # Avoid duplicates with simulated volumes
+                        if not any(r.mount_point == telemetry.mount_point for r in results):
+                            results.append(telemetry)
+            except Exception:
+                pass
+
+        # Filter to USB mass storage and removable volumes (avoiding internal OS root drives like /)
+        qualifying = [
+            t for t in results
+            if t.classification in (
+                DeviceClassification.USB_MASS_STORAGE,
+                DeviceClassification.UNKNOWN_REMOVABLE,
+            )
+        ]
+
+        # Sort so USB Mass Storage devices appear first, followed by removable volumes
+        qualifying.sort(
+            key=lambda t: (
+                0 if t.classification == DeviceClassification.USB_MASS_STORAGE else 1,
+                (t.volume_label or "").lower(),
+            )
+        )
+        return qualifying
+
+    def get_volume_telemetry(self, drive_or_path: str) -> Optional[DeviceTelemetry]:
+        """Query detailed telemetry for a macOS volume path or device identifier."""
+        norm_path = normalize_drive_letter(drive_or_path)
+
+        with self._lock:
+            if norm_path in self._simulated_volumes:
+                return self._simulated_volumes[norm_path]
+
+        # Resolve path target: check direct path or /Volumes/<name>
+        target = norm_path
+        if not os.path.exists(target):
+            alt_target = f"/Volumes/{norm_path}"
+            if os.path.exists(alt_target):
+                target = alt_target
+
+        # Attempt diskutil query
+        data = self._query_diskutil_plist(target)
+        if data is not None:
+            return self._parse_diskutil_data(data, target)
+
+        # Fallback to statvfs if target path exists on disk
+        if os.path.exists(target):
+            return self._statvfs_fallback(target)
+
+        return None
+
+    def _query_diskutil_plist(self, target: str) -> Optional[dict[str, Any]]:
+        """Query diskutil info -plist for target path or disk identifier."""
+        try:
+            res = subprocess.run(
+                ["diskutil", "info", "-plist", target],
+                capture_output=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout:
+                data = plistlib.loads(res.stdout)
+                if isinstance(data, dict) and not data.get("Error"):
+                    return data
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError, Exception):
+            pass
+        return None
+
+    def _parse_diskutil_data(self, data: dict[str, Any], path_or_id: str) -> DeviceTelemetry:
+        """Parse diskutil property dictionary into typed DeviceTelemetry."""
+        bus_proto = data.get("BusProtocol", "")
+        is_usb = str(bus_proto).upper() == "USB"
+        is_removable = bool(
+            data.get("RemovableMedia")
+            or data.get("Removable")
+            or data.get("Ejectable")
+        )
+        is_internal = bool(data.get("Internal", False))
+
+        if is_usb:
+            classification = DeviceClassification.USB_MASS_STORAGE
+            confidence = DetectionConfidence.HIGH_IOCTL_USB
+            bus_type = "USB"
+        elif is_removable and not is_internal:
+            classification = DeviceClassification.UNKNOWN_REMOVABLE
+            confidence = DetectionConfidence.HEURISTIC_REMOVABLE
+            bus_type = bus_proto or "REMOVABLE"
+        elif is_internal:
+            classification = DeviceClassification.FIXED_VOLUME
+            confidence = DetectionConfidence.UNVERIFIED
+            bus_type = bus_proto or "INTERNAL"
+        else:
+            classification = DeviceClassification.UNKNOWN
+            confidence = DetectionConfidence.UNVERIFIED
+            bus_type = bus_proto or "UNKNOWN"
+
+        mount_point = data.get("MountPoint") or path_or_id
+        device_id = data.get("DeviceIdentifier") or mount_point
+        volume_label = data.get("VolumeName") or os.path.basename(mount_point) or "(No Label)"
+        filesystem = data.get("FilesystemName") or data.get("FilesystemType") or "Unknown"
+
+        total_bytes = data.get("TotalSize")
+        free_bytes = data.get("FreeSpace")
+
+        if total_bytes is None or free_bytes is None:
+            st_total, st_free = self._statvfs_capacity(mount_point)
+            total_bytes = total_bytes or st_total
+            free_bytes = free_bytes or st_free
+
+        volume_serial = data.get("VolumeUUID")
+        device_model = data.get("MediaName") or data.get("IORegistryEntryName")
+
+        return DeviceTelemetry(
+            device_id=device_id,
+            detected_at=utc_now(),
+            mount_point=mount_point,
+            volume_label=volume_label,
+            filesystem=filesystem,
+            total_bytes=total_bytes,
+            free_bytes=free_bytes,
+            volume_serial=volume_serial,
+            classification=classification,
+            confidence=confidence,
+            detection_backend="MACOS_DISKUTIL",
+            device_model=device_model,
+            bus_type=bus_type,
+        )
+
+    def _statvfs_capacity(self, path: str) -> tuple[Optional[int], Optional[int]]:
+        """Retrieve total and free bytes using POSIX statvfs."""
+        try:
+            st = os.statvfs(path)
+            total = st.f_blocks * st.f_frsize
+            free = st.f_bavail * st.f_frsize
+            return total, free
+        except (OSError, PermissionError, FileNotFoundError):
+            return None, None
+
+    def _statvfs_fallback(self, path: str) -> DeviceTelemetry:
+        """Produce fallback DeviceTelemetry using pure standard library statvfs."""
+        total_bytes, free_bytes = self._statvfs_capacity(path)
+        is_vol = str(path).startswith("/Volumes")
+        classification = (
+            DeviceClassification.UNKNOWN_REMOVABLE if is_vol else DeviceClassification.FIXED_VOLUME
+        )
+        return DeviceTelemetry(
+            device_id=path,
+            detected_at=utc_now(),
+            mount_point=path,
+            volume_label=os.path.basename(path) or path,
+            filesystem="Unknown",
+            total_bytes=total_bytes,
+            free_bytes=free_bytes,
+            classification=classification,
+            confidence=DetectionConfidence.UNVERIFIED,
+            detection_backend="POSIX_STATVFS",
+            bus_type="UNKNOWN",
+        )
+
+    def start_event_monitoring(self, event_callback: Callable[[RawDeviceEvent], None]) -> None:
+        """Begin background polling of /Volumes to detect device arrival and removal events."""
+        with self._lock:
+            if self._monitoring:
+                return
+            self._callback = event_callback
+            self._monitoring = True
+            self._stop_event.clear()
+
+            # Record baseline of currently attached volumes
+            self._known_volumes = self._scan_volume_paths()
+
+            self._monitor_thread = threading.Thread(
+                target=self._poll_loop,
+                name="MacOSVolumeMonitor",
+                daemon=True,
+            )
+            self._monitor_thread.start()
+
+    def stop_event_monitoring(self) -> None:
+        """Clean shutdown of volume monitoring thread."""
+        with self._lock:
+            if not self._monitoring:
+                return
+            self._monitoring = False
+            self._stop_event.set()
+
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=3.0)
+
+    def _scan_volume_paths(self) -> set[str]:
+        """Scan active paths under /Volumes."""
+        volumes_dir = Path("/Volumes")
+        if not volumes_dir.is_dir():
+            return set()
+        try:
+            return {
+                entry.path
+                for entry in os.scandir(volumes_dir)
+                if not entry.name.startswith(".")
+            }
+        except Exception:
+            return set()
+
+    def _poll_loop(self) -> None:
+        """Background thread polling /Volumes for arrival and removal transitions."""
+        while not self._stop_event.is_set():
+            if self._stop_event.wait(self._poll_interval):
+                break
+
+            current_volumes = self._scan_volume_paths()
+            with self._lock:
+                added = current_volumes - self._known_volumes
+                removed = self._known_volumes - current_volumes
+                self._known_volumes = current_volumes
+                callback = self._callback
+
+            if callback is not None:
+                for path in added:
+                    try:
+                        callback(
+                            RawDeviceEvent(
+                                event_type=DeviceEventType.ARRIVED,
+                                drive_letter=path,
+                                device_id=path,
+                            )
+                        )
+                    except Exception:
+                        pass
+
+                for path in removed:
+                    try:
+                        callback(
+                            RawDeviceEvent(
+                                event_type=DeviceEventType.REMOVED,
+                                drive_letter=path,
+                                device_id=path,
+                            )
+                        )
+                    except Exception:
+                        pass
+
+    def simulate_arrival(self, drive_or_path: str, telemetry: Optional[DeviceTelemetry] = None) -> None:
+        """Simulate hardware arrival notification for testing."""
+        norm = normalize_drive_letter(drive_or_path)
+        with self._lock:
+            if telemetry is not None:
+                self._simulated_volumes[norm] = telemetry
+            callback = self._callback if self._monitoring else None
+
+        if callback is not None:
+            callback(RawDeviceEvent(event_type=DeviceEventType.ARRIVED, drive_letter=norm, device_id=norm))
+
+    def simulate_removal(self, drive_or_path: str) -> None:
+        """Simulate hardware removal notification for testing."""
+        norm = normalize_drive_letter(drive_or_path)
+        with self._lock:
+            self._simulated_volumes.pop(norm, None)
+            callback = self._callback if self._monitoring else None
+
+        if callback is not None:
+            callback(RawDeviceEvent(event_type=DeviceEventType.REMOVED, drive_letter=norm, device_id=norm))
+
+
 class UnsupportedPlatformDetector(BaseDeviceDetector):
     """Fallback detector for non-Windows hosts that explicitly communicates unmonitored status."""
 
@@ -787,9 +1104,12 @@ def get_device_detector(config: Optional[SentinelConfig] = None) -> BaseDeviceDe
     """Return the platform-appropriate storage device detector instance.
 
     On Windows hosts (win32), returns WindowsDeviceDetector.
-    On non-Windows development hosts (macOS/Linux), returns UnsupportedPlatformDetector.
+    On macOS hosts (darwin), returns MacOSDeviceDetector.
+    On other platforms (Linux/BSD), returns UnsupportedPlatformDetector.
     """
     cfg = config or get_config()
     if sys.platform == "win32":
         return WindowsDeviceDetector(config=cfg)
+    if sys.platform == "darwin":
+        return MacOSDeviceDetector(config=cfg)
     return UnsupportedPlatformDetector(config=cfg)
