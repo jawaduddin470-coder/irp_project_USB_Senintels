@@ -225,11 +225,18 @@
         {% endif %}
 
         {% if last_scan_info %}
-        <div class="panel-footer">
+        <div class="panel-footer" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <span class="mono" style="font-size: 11px; color: var(--text-secondary);">
-                Last Evaluated Target: <strong>{{ last_scan_info.target_path }}</strong>
+                Last Target: <strong>{{ last_scan_info.target_path }}</strong>
+                {% if last_scan_info.duration_seconds is defined and last_scan_info.duration_seconds is not none %}
+                    &bull; Duration: <strong>{{ last_scan_info.duration_seconds|round(2) }}s</strong>
+                {% endif %}
+                &bull; Files: <strong>{{ last_scan_info.files_inspected }}</strong>
+                &bull; Flagged: <strong>{{ last_scan_info.findings_count }}</strong>
             </span>
-            <span class="badge badge-neutral">{{ last_scan_info.status }}</span>
+            <span class="badge badge-{% if last_scan_info.status == 'COMPLETED' %}success{% elif last_scan_info.status == 'IN_PROGRESS' %}info{% else %}neutral{% endif %}">
+                {{ last_scan_info.status }}
+            </span>
         </div>
         {% endif %}
     </div>

@@ -774,8 +774,13 @@ class MacOSDeviceDetector(BaseDeviceDetector):
 
     def _parse_diskutil_data(self, data: dict[str, Any], path_or_id: str) -> DeviceTelemetry:
         """Parse diskutil property dictionary into typed DeviceTelemetry."""
-        bus_proto = data.get("BusProtocol", "")
-        is_usb = str(bus_proto).upper() == "USB"
+        bus_proto = str(data.get("BusProtocol", "")).strip()
+        is_usb = bus_proto.upper() == "USB"
+        is_virtual = bool(
+            data.get("Virtual")
+            or str(data.get("VirtualOrPhysical", "")).lower() == "virtual"
+            or bus_proto.lower() == "disk image"
+        )
         is_removable = bool(
             data.get("RemovableMedia")
             or data.get("Removable")
@@ -783,22 +788,33 @@ class MacOSDeviceDetector(BaseDeviceDetector):
         )
         is_internal = bool(data.get("Internal", False))
 
-        if is_usb:
+        # Do NOT infer physical USB hardware from a mount path alone.
+        # Only verify USB if the underlying hardware bus protocol is explicitly USB and non-virtual.
+        if is_usb and not is_virtual:
             classification = DeviceClassification.USB_MASS_STORAGE
             confidence = DetectionConfidence.HIGH_IOCTL_USB
             bus_type = "USB"
+            warning = None
+        elif is_virtual or bus_proto.lower() == "disk image":
+            classification = DeviceClassification.UNKNOWN_REMOVABLE
+            confidence = DetectionConfidence.UNVERIFIED
+            bus_type = "Disk Image (Virtual)"
+            warning = "Virtual disk image attached. Physical USB controller cannot be confirmed from image alone."
         elif is_removable and not is_internal:
             classification = DeviceClassification.UNKNOWN_REMOVABLE
             confidence = DetectionConfidence.HEURISTIC_REMOVABLE
             bus_type = bus_proto or "REMOVABLE"
+            warning = "Removable storage detected without definitive USB bus confirmation."
         elif is_internal:
             classification = DeviceClassification.FIXED_VOLUME
             confidence = DetectionConfidence.UNVERIFIED
             bus_type = bus_proto or "INTERNAL"
+            warning = "Internal fixed disk; not an external USB device."
         else:
             classification = DeviceClassification.UNKNOWN
             confidence = DetectionConfidence.UNVERIFIED
             bus_type = bus_proto or "UNKNOWN"
+            warning = "Unable to establish storage bus protocol."
 
         mount_point = data.get("MountPoint") or path_or_id
         device_id = data.get("DeviceIdentifier") or mount_point
@@ -828,6 +844,7 @@ class MacOSDeviceDetector(BaseDeviceDetector):
             classification=classification,
             confidence=confidence,
             detection_backend="MACOS_DISKUTIL",
+            warning=warning,
             device_model=device_model,
             bus_type=bus_type,
         )

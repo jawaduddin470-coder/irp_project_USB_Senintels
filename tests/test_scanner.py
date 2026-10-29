@@ -315,3 +315,37 @@ def test_normalize_scan_path_posix_does_not_prefix(monkeypatch: pytest.MonkeyPat
     long_path = Path("/var/tmp/" + "a" * 300)
     normalized = normalize_scan_path(long_path)
     assert not str(normalized).startswith("\\\\?\\")
+
+
+def test_scan_canonical_file_deduplication(scanner: VolumeScanner, tmp_path: Path) -> None:
+    """Verify hard links to the same canonical file are deduplicated while distinct files are preserved."""
+    root = tmp_path / "test_usb"
+    root.mkdir()
+    f1 = root / "payload.exe"
+    f1.write_bytes(b"MZ\x90\x00" + b"\x00" * 60)
+
+    # Create hard link to f1
+    hardlink = root / "payload_hardlink.exe"
+    try:
+        os.link(f1, hardlink)
+        has_hardlink = True
+    except OSError:
+        has_hardlink = False
+
+    # Create distinct file in subdirectory
+    subdir = root / "subfolder"
+    subdir.mkdir()
+    f2 = subdir / "payload.exe"
+    f2.write_bytes(b"MZ\x90\x00" + b"\x01" * 60)
+
+    report = scanner.scan(root)
+
+    # The distinct file in subfolder must be preserved
+    found_paths = [Path(f.file_path).name for f in report.findings]
+    assert "payload.exe" in found_paths
+
+    if has_hardlink:
+        # The hardlink should be skipped during canonical traversal
+        canonical_count = sum(1 for p in report.findings if Path(p.file_path).name.startswith("payload"))
+        assert canonical_count == 2  # f1 and f2, NOT f1 + hardlink + f2
+

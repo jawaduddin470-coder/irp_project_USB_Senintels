@@ -265,7 +265,12 @@
                 <tr>
                     <td><strong>{{ file.file_name }}</strong></td>
                     <td class="mono" style="font-size: 11px;" title="{{ file.file_path }}">
-                        {{ file.file_path|truncate(35) }}
+                        {% if file.display_location %}
+                            <strong>{{ file.display_location }}</strong>
+                            <div style="font-size: 10px; color: var(--text-secondary);">{{ file.file_path|truncate(35) }}</div>
+                        {% else %}
+                            {{ file.file_path|truncate(35) }}
+                        {% endif %}
                     </td>
                     <td>{{ (file.file_size / 1024)|round(1) }} KB</td>
                     <td>
@@ -286,7 +291,13 @@
                         {% endfor %}
                     </td>
                     <td class="mono" style="font-size: 10px;" title="{{ file.sha256 }}">
-                        {{ file.sha256[:12] }}...
+                        {% if file.sha256 and file.sha256|length == 64 and ' ' not in file.sha256 %}
+                            <span>{{ file.sha256[:10] }}...{{ file.sha256[-4:] }}</span>
+                        {% elif file.sha256 and ('Error' in file.sha256 or 'Denied' in file.sha256 or 'Failed' in file.sha256) %}
+                            <span class="badge badge-warning" style="font-size: 9px; white-space: normal; line-height: 1.2;">{{ file.sha256 }}</span>
+                        {% else %}
+                            <span class="badge badge-neutral" style="font-size: 9px;">{{ file.sha256 or 'N/A' }}</span>
+                        {% endif %}
                     </td>
                     <td>
                         <form method="POST" action="{{ url_for('quarantine_file_action') }}" onsubmit="return confirm('Quarantine {{ file.file_name }}? It will be encrypted into the vault and safely removed from the source volume.');">

@@ -183,6 +183,7 @@ class VolumeScanner:
 
         visited_dirs: set[str] = set()
         visited_dirs.add(str(scan_root))
+        visited_canonical_files: set[Any] = set()
 
         status = ScanStatus.IN_PROGRESS
         aborted = False
@@ -270,6 +271,16 @@ class VolumeScanner:
                 except OSError as exc:
                     errors.append(f"I/O error reading '{raw_file_path}': {exc}")
                     continue
+
+                # Skip duplicate inspections of the same canonical file / inode (hard links / aliases)
+                try:
+                    file_identity: Any = (st.st_dev, st.st_ino) if st.st_ino else str(raw_file_path.resolve())
+                    if file_identity in visited_canonical_files:
+                        skipped_paths.append(str(raw_file_path))
+                        continue
+                    visited_canonical_files.add(file_identity)
+                except (OSError, PermissionError):
+                    pass
 
                 modified_at, created_at = extract_platform_timestamps(st)
                 extension = raw_file_path.suffix.lower()

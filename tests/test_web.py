@@ -496,6 +496,7 @@ def test_run_web_port_binding_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("usb_sentinel.web_app.create_app", lambda **kwargs: mock_app)
 
     # 1. Successful bind should use port 5000 directly
+    monkeypatch.setattr(socket.socket, "bind", lambda self, addr: None)
     run_web(host="127.0.0.1", port=5000)
     mock_app.run.assert_called_with(host="127.0.0.1", port=5000, debug=False)
 
@@ -510,3 +511,114 @@ def test_run_web_port_binding_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "bind", failing_bind)
     run_web(host="127.0.0.1", port=5000)
     mock_app.run.assert_called_with(host="127.0.0.1", port=5050, debug=False)
+
+
+def test_devices_view_deduplication_and_sha256(client: FlaskClient, web_app: Flask, tmp_path: Path) -> None:
+    """Verify devices route computes real SHA-256, deduplicates canonical paths, and formats hidden dirs."""
+    from usb_sentinel.models import RiskFinding, RiskSeverity, ScanResult, ScanStatus, utc_now
+    from usb_sentinel.scanner import ScanReport
+    from usb_sentinel.integrity import compute_sha256
+
+    root = tmp_path / "usb_mount"
+    root.mkdir()
+    f1 = root / "sample.exe"
+    f1.write_bytes(b"MZ\x90\x00" + b"\x55" * 100)
+    expected_hash = compute_sha256(f1)
+
+    # Subdirectory with non-breaking space (worm style)
+    sub = root / "\xa0"
+    sub.mkdir()
+    f2 = sub / "sample.exe"
+    f2.write_bytes(b"MZ\x90\x00" + b"\x99" * 100)
+
+    # Mock scan report with 3 findings (f1 twice under different symlink/path, and f2)
+    findings = [
+        RiskFinding(
+            file_path=str(f1),
+            severity=RiskSeverity.SUSPICIOUS,
+            matched_rule="RULE_SUSPICIOUS_EXTENSION_EXE",
+            explanation="PE binary detected.",
+        ),
+        RiskFinding(
+            file_path=str(f1),  # Duplicate canonical path
+            severity=RiskSeverity.SUSPICIOUS,
+            matched_rule="RULE_SUSPICIOUS_EXTENSION_EXE",
+            explanation="PE binary detected.",
+        ),
+        RiskFinding(
+            file_path=str(f2),
+            severity=RiskSeverity.SUSPICIOUS,
+            matched_rule="RULE_SUSPICIOUS_EXTENSION_EXE",
+            explanation="PE binary in hidden folder.",
+        ),
+    ]
+    report = ScanReport(
+        result=ScanResult(
+            scan_id="SCAN-TEST-001",
+            target_path=str(root),
+            status=ScanStatus.COMPLETED,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+            files_inspected=2,
+            findings_count=3,
+        ),
+        findings=findings,
+    )
+    web_app.hub.last_scan_report = report
+
+    resp = client.get("/devices")
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+
+    # Real SHA-256 substring should be present in HTML
+    assert expected_hash[:10] in html
+    # Hidden directory should be cleanly presented as [U+00A0]
+    assert "[U+00A0]" in html
+    # Root file should be presented as / (Root)
+    assert "/ (Root)" in html
+
+
+def test_devices_view_sha256_io_error_handling(client: FlaskClient, web_app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify I/O errors during hashing display descriptive diagnostics rather than uninformative N/A."""
+    from usb_sentinel.models import RiskFinding, RiskSeverity, ScanResult, ScanStatus, utc_now
+    from usb_sentinel.scanner import ScanReport
+    from usb_sentinel.integrity import IntegrityIOError
+
+    root = tmp_path / "mock_drive"
+    root.mkdir()
+    f = root / "unreadable.exe"
+    f.write_bytes(b"MZ\x00\x00")
+
+    def mock_hash_failure(path, **kwargs):
+        raise IntegrityIOError("OS Error: [Errno 22] Invalid argument")
+
+    monkeypatch.setattr("usb_sentinel.web_app.compute_sha256", mock_hash_failure)
+
+    report = ScanReport(
+        result=ScanResult(
+            scan_id="SCAN-TEST-002",
+            target_path=str(root),
+            status=ScanStatus.COMPLETED,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+            files_inspected=1,
+            findings_count=1,
+        ),
+        findings=[
+            RiskFinding(
+                file_path=str(f),
+                severity=RiskSeverity.SUSPICIOUS,
+                matched_rule="RULE_SUSPICIOUS_EXTENSION_EXE",
+                explanation="PE binary detected.",
+            )
+        ],
+    )
+    web_app.hub.last_scan_report = report
+
+    resp = client.get("/devices")
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+
+    assert "I/O Read Error" in html
+    assert "Invalid argument" in html
+

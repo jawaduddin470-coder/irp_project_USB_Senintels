@@ -315,3 +315,31 @@ def test_web_error_visibility_on_detection_failure(isolated_config: SentinelConf
     assert res_dash.status_code == 200
     assert "Device Enumeration Warning" in res_dash.text
     assert "diskutil process timeout" in res_dash.text
+
+
+def test_macos_detector_virtual_disk_image_classification() -> None:
+    """Verify virtual disk images are classified as UNKNOWN_REMOVABLE with UNVERIFIED confidence."""
+    detector = MacOSDeviceDetector()
+    virtual_plist = {
+        "Bootable": False,
+        "BusProtocol": "Disk Image",
+        "DeviceBlockSize": 512,
+        "DeviceIdentifier": "disk7s1",
+        "Ejectable": True,
+        "FilesystemName": "MS-DOS FAT32",
+        "Internal": False,
+        "MediaName": "Disk Image",
+        "MountPoint": "/Volumes/NO NAME",
+        "Removable": True,
+        "RemovableMedia": True,
+        "TotalSize": 1000000,
+        "FreeSpace": 500000,
+        "Virtual": True,
+    }
+    telemetry = detector._parse_diskutil_data(virtual_plist, "/Volumes/NO NAME")
+    assert telemetry.classification == DeviceClassification.UNKNOWN_REMOVABLE
+    assert telemetry.confidence == DetectionConfidence.UNVERIFIED
+    assert telemetry.bus_type == "Disk Image (Virtual)"
+    assert telemetry.warning is not None
+    assert "Virtual disk image" in telemetry.warning
+

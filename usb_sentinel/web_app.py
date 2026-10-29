@@ -55,7 +55,7 @@ from usb_sentinel.device_detection import (
     BaseDeviceDetector,
     get_device_detector,
 )
-from usb_sentinel.integrity import compute_sha256
+from usb_sentinel.integrity import IntegrityError, IntegrityIOError, compute_sha256
 from usb_sentinel.models import (
     AuditEvent,
     AuditEventType,
@@ -579,12 +579,17 @@ def create_app(
         flagged_count = last_rep.result.findings_count if last_rep else 0
         last_scan_info = None
         if last_rep:
+            res = last_rep.result
+            duration = 0.0
+            if res.completed_at and res.started_at:
+                duration = max(0.0, (res.completed_at - res.started_at).total_seconds())
             last_scan_info = {
-                "target_path": last_rep.result.target_path,
-                "status": last_rep.result.status.value,
-                "started_at": format_utc_timestamp(last_rep.result.started_at),
-                "files_inspected": last_rep.result.files_inspected,
-                "findings_count": last_rep.result.findings_count,
+                "target_path": res.target_path,
+                "status": res.status.value,
+                "started_at": format_utc_timestamp(res.started_at),
+                "files_inspected": res.files_inspected,
+                "findings_count": res.findings_count,
+                "duration_seconds": duration,
             }
 
         # 5. Recent audit events (latest 8)
@@ -632,24 +637,65 @@ def create_app(
             if res.completed_at and res.started_at:
                 duration = max(0.0, (res.completed_at - res.started_at).total_seconds())
 
-            # Format flagged findings
+            # Format flagged findings with canonical deduplication and error diagnostics
             flagged_files_view = []
+            seen_canonical_paths: set[Any] = set()
+            target_root = str(res.target_path).rstrip(os.sep)
+
             for f in last_rep.findings:
                 fp = Path(f.file_path)
+                canon_key: Any = str(fp)
                 f_size = 0
                 f_sha = "N/A"
                 if fp.exists() and fp.is_file():
                     try:
-                        f_size = fp.stat().st_size
-                        f_sha = compute_sha256(fp)
+                        st = fp.stat()
+                        f_size = st.st_size
+                        canon_key = (st.st_dev, st.st_ino) if st.st_ino else str(fp.resolve())
                     except Exception:
-                        pass
+                        try:
+                            canon_key = str(fp.resolve())
+                        except Exception:
+                            canon_key = str(fp)
+
+                    try:
+                        f_sha = compute_sha256(fp)
+                    except PermissionError:
+                        f_sha = "Access Denied (PermissionError)"
+                    except IntegrityIOError as io_err:
+                        f_sha = f"I/O Read Error ({io_err})"
+                    except OSError as os_err:
+                        f_sha = f"OS Read Error ({os_err})"
+                    except Exception as exc:
+                        f_sha = f"Hash Error ({type(exc).__name__})"
+
+                if canon_key in seen_canonical_paths:
+                    continue
+                seen_canonical_paths.add(canon_key)
+
+                # Calculate user-friendly relative location
+                file_str = str(fp)
+                if file_str.startswith(target_root) and len(file_str) > len(target_root):
+                    rel = file_str[len(target_root):].lstrip(os.sep)
+                    parent_rel = os.path.dirname(rel)
+                    if not parent_rel:
+                        display_loc = "/ (Root)"
+                    else:
+                        # Cleanly represent non-printable characters e.g. \u00a0 / \xa0
+                        clean_parent = "".join(
+                            c if c.isprintable() and c != " " else (f"[U+{ord(c):04X}]" if not c.isprintable() else c)
+                            for c in parent_rel
+                        )
+                        display_loc = f"/{clean_parent}"
+                else:
+                    display_loc = fp.parent.name or str(fp.parent)
 
                 r_score = 90 if f.severity == RiskSeverity.HIGH else (60 if f.severity == RiskSeverity.SUSPICIOUS else 30)
                 flagged_files_view.append(
                     {
                         "file_name": fp.name,
                         "file_path": str(fp),
+                        "display_location": display_loc,
                         "file_size": f_size,
                         "risk_score": r_score,
                         "classification": f.severity.value,
@@ -662,7 +708,7 @@ def create_app(
                 "timestamp": format_utc_timestamp(res.started_at),
                 "target_path": res.target_path,
                 "files_scanned": res.files_inspected,
-                "flagged_count": res.findings_count,
+                "flagged_count": len(flagged_files_view),
                 "duration_seconds": duration,
                 "flagged_files": flagged_files_view,
             }
