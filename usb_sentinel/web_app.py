@@ -1073,13 +1073,21 @@ def run_web(
 
     import socket
 
+    # Test if the specified host:port is genuinely bindable (using SO_REUSEADDR)
+    # Note: connect_ex must NOT be used because it connects to macOS wildcard listeners (e.g. AirPlay on 0.0.0.0:5000)
+    target_port = port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex((host, port)) == 0 and port == 5000:
-            print(f"[!] Port {port} is occupied on this host. Falling back to port 5050.")
-            port = 5050
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, target_port))
+        except OSError:
+            fallback_port = 5050 if target_port == 5000 else target_port + 1
+            print(f"[!] Port {target_port} is already actively bound on {host}. Falling back to port {fallback_port}.")
+            target_port = fallback_port
 
     app = create_app(config=config)
-    print(f"[*] Starting USB Sentinel Web Dashboard on http://{host}:{port}/")
+    print(f"[*] Starting USB Sentinel Web Dashboard on http://{host}:{target_port}/")
+    print(f"[*] Open http://{host}:{target_port}/ in your web browser (Safari / Chrome).")
     print("[*] Press Ctrl+C to terminate the web server.")
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=target_port, debug=debug)
 

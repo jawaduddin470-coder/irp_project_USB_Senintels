@@ -485,3 +485,28 @@ def test_localhost_binding_enforcement() -> None:
 
     with pytest.raises(ValueError, match="strictly bind to 127.0.0.1"):
         run_web(host="192.168.1.100")
+
+
+def test_run_web_port_binding_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_web should attempt to bind port 5000 directly, falling back only when OSError occurs."""
+    from unittest.mock import MagicMock
+    import socket
+
+    mock_app = MagicMock()
+    monkeypatch.setattr("usb_sentinel.web_app.create_app", lambda **kwargs: mock_app)
+
+    # 1. Successful bind should use port 5000 directly
+    run_web(host="127.0.0.1", port=5000)
+    mock_app.run.assert_called_with(host="127.0.0.1", port=5000, debug=False)
+
+    # 2. When socket.bind raises OSError, it should fallback to 5050
+    orig_bind = socket.socket.bind
+
+    def failing_bind(self, addr):
+        if addr == ("127.0.0.1", 5000):
+            raise OSError(48, "Address already in use")
+        return orig_bind(self, addr)
+
+    monkeypatch.setattr(socket.socket, "bind", failing_bind)
+    run_web(host="127.0.0.1", port=5000)
+    mock_app.run.assert_called_with(host="127.0.0.1", port=5050, debug=False)
