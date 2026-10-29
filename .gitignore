@@ -51,15 +51,20 @@ Thumbs.db
 desktop.ini
 
 # Security, Credentials, and Keys (CRITICAL: Never commit secrets)
+.env
+.env.*
+*.env
 *.key
 *.key.dpapi
 *.pem
 *.secret
 *.passphrase
 master.key*
+keys/
 
 # Runtime Application Data, Vault, and Staging (Local to machine)
 vault/
+quarantine_vault/
 staging/
 *.qnt
 *.tmp
@@ -69,3 +74,12 @@ usb_sentinel_audit.csv
 quarantine_index.txt
 reports/
 *.log
+
+# Disk Images and USB Backups
+*.dmg
+*.iso
+*.img
+backup/
+backups/
+usb_backup/
+usb_backups/
