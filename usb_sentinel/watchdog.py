@@ -223,9 +223,12 @@ class USBWatchdog:
             try:
                 initial_volumes = self._detector.get_mounted_volumes()
                 for telemetry in initial_volumes:
-                    if telemetry.classification in (
-                        DeviceClassification.USB_MASS_STORAGE,
-                        DeviceClassification.UNKNOWN_REMOVABLE,
+                    if (
+                        telemetry.classification in (
+                            DeviceClassification.PHYSICAL_USB,
+                            DeviceClassification.OTHER_REMOVABLE,
+                        )
+                        and not telemetry.is_virtual
                     ):
                         self._register_initial_session(telemetry)
             except Exception as exc:
@@ -431,14 +434,17 @@ class USBWatchdog:
                 pass
             return
 
-        # Classification check: only process USB storage or unverified removable media
-        if telemetry.classification not in (
-            DeviceClassification.USB_MASS_STORAGE,
-            DeviceClassification.UNKNOWN_REMOVABLE,
+        # Classification check: only process verified physical USB storage or non-virtual removable media
+        if (
+            telemetry.classification not in (
+                DeviceClassification.PHYSICAL_USB,
+                DeviceClassification.OTHER_REMOVABLE,
+            )
+            or telemetry.is_virtual
         ):
             with self._lock:
                 self._pending_discoveries.pop(drive, None)
-            # Internal fixed disk, optical drive, or unclassified device: DO NOT TREAT AS USB!
+            # Virtual disk image, internal fixed disk, optical drive, or unclassified device: DO NOT TREAT AS USB!
             warn_evt = AuditEvent(
                 event_id=f"EVT_IGN_{uuid.uuid4().hex[:8]}",
                 timestamp=utc_now(),

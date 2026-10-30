@@ -98,8 +98,13 @@
                 </svg>
             </div>
         </div>
-        <div class="metric-value">{{ usb_devices|length }}</div>
-        <div class="metric-subtext">Active USB mass storage mounts</div>
+        <div class="metric-value">{{ physical_usb_count }}</div>
+        <div class="metric-subtext">
+            Verified physical USB hardware
+            {% if virtual_disk_count > 0 %}
+                &bull; <span style="color: var(--primary-blue);">{{ virtual_disk_count }} virtual image</span>
+            {% endif %}
+        </div>
     </div>
 
     <div class="metric-card">
@@ -173,7 +178,7 @@
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>Mount Path</th>
+                        <th>Physical Mount Path</th>
                         <th>Volume Label</th>
                         <th>File System</th>
                         <th>Bus Type</th>
@@ -184,12 +189,22 @@
                 <tbody>
                     {% for dev in usb_devices %}
                     <tr>
-                        <td class="mono"><strong>{{ dev.mount_point or dev.device_path }}</strong></td>
+                        <td class="mono">
+                            <strong>{{ dev.mount_point or dev.device_path }}</strong>
+                            {% if dev.partition_count > 1 %}
+                                <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">
+                                    {{ dev.partition_count }} Partitions:
+                                    {% for p in dev.partitions %}
+                                        <span class="badge badge-neutral" style="font-size: 9px;">{{ p.mount_point }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </td>
                         <td>{{ dev.volume_label or '(No Label)' }}</td>
                         <td><span class="badge badge-neutral">{{ dev.file_system or 'Unknown' }}</span></td>
                         <td><span class="badge badge-info">{{ dev.bus_type }}</span></td>
                         <td>
-                            <span class="badge badge-{% if dev.classification == 'USB_MASS_STORAGE' %}success{% else %}warning{% endif %}">
+                            <span class="badge badge-success">
                                 {{ dev.classification }}
                             </span>
                         </td>
@@ -216,10 +231,55 @@
                     <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
                 </svg>
             </div>
-            <div class="empty-state-title">No USB Mass Storage Devices Detected</div>
-            <div class="empty-state-desc">Insert a USB flash drive or external disk to begin real-time telemetry monitoring, or scan a directory manually.</div>
-            <div style="margin-top: 10px;">
-                <a href="{{ url_for('devices') }}" class="btn btn-secondary btn-sm">Open Scanner Console</a>
+            <div class="empty-state-title">No Physical USB Storage Devices Detected</div>
+            <div class="empty-state-desc">Insert a physical USB flash drive to begin real-time hardware telemetry monitoring.</div>
+        </div>
+        {% endif %}
+
+        <!-- Virtual Disk Images & Forensic Mounts Section -->
+        {% if virtual_disk_devices %}
+        <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div>
+                    <h3 style="font-size: 13px; font-weight: 600; color: var(--navy-dark); margin: 0;">Virtual Disk Images &amp; Forensic Mounts</h3>
+                    <div style="font-size: 11px; color: var(--text-secondary);">Attached disk images available for on-demand forensic inspection. Not counted as physical USB hardware.</div>
+                </div>
+                <span class="badge badge-neutral">{{ virtual_disk_devices|length }} Virtual Image(s)</span>
+            </div>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Image Mount</th>
+                            <th>Image Label</th>
+                            <th>File System</th>
+                            <th>Bus Type</th>
+                            <th>Classification</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for vdev in virtual_disk_devices %}
+                        <tr>
+                            <td class="mono"><strong>{{ vdev.mount_point or vdev.device_path }}</strong></td>
+                            <td>{{ vdev.volume_label or '(No Label)' }}</td>
+                            <td><span class="badge badge-neutral">{{ vdev.file_system or 'Unknown' }}</span></td>
+                            <td><span class="badge badge-neutral">{{ vdev.bus_type }}</span></td>
+                            <td><span class="badge badge-neutral mono">{{ vdev.classification }}</span></td>
+                            <td>
+                                <form method="POST" action="{{ url_for('scan_device') }}" style="display:inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="target_path" value="{{ vdev.mount_point or vdev.device_path }}">
+                                    <button type="submit" class="btn btn-secondary btn-sm">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                        Scan Forensic Image
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
         {% endif %}

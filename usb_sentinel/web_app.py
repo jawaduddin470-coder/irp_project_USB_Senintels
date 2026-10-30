@@ -200,6 +200,11 @@ class DeviceTelemetryViewModel:
     total_bytes: int
     total_size_bytes: int
     free_bytes: int
+    parent_device_id: Optional[str] = None
+    is_virtual: bool = False
+    partitions: list[dict[str, Any]] = field(default_factory=list)
+    partition_count: int = 1
+    device_model: Optional[str] = None
 
 
 def adapt_telemetry(t: DeviceTelemetry) -> DeviceTelemetryViewModel:
@@ -211,12 +216,116 @@ def adapt_telemetry(t: DeviceTelemetry) -> DeviceTelemetryViewModel:
         device_path=t.device_id,
         volume_label=t.volume_label or "",
         file_system=t.filesystem or "Unknown",
-        bus_type=t.bus_type or "USB",
+        bus_type=t.bus_type or ("USB" if cls_str == "PHYSICAL_USB" else "Storage"),
         classification=cls_str,
-        total_bytes=t.total_bytes,
-        total_size_bytes=t.total_bytes,
-        free_bytes=t.free_bytes,
+        total_bytes=t.total_bytes or 0,
+        total_size_bytes=t.total_bytes or 0,
+        free_bytes=t.free_bytes or 0,
+        parent_device_id=t.parent_device_id or t.device_id,
+        is_virtual=t.is_virtual or cls_str == DeviceClassification.VIRTUAL_DISK_IMAGE.value,
+        partitions=[
+            {
+                "device_id": t.device_id,
+                "mount_point": mp,
+                "volume_label": t.volume_label or "(No Label)",
+                "filesystem": t.filesystem or "Unknown",
+                "total_bytes": t.total_bytes or 0,
+                "free_bytes": t.free_bytes or 0,
+            }
+        ],
+        partition_count=1,
+        device_model=t.device_model,
     )
+
+
+def group_and_adapt_storage(
+    raw_volumes: Sequence[DeviceTelemetry],
+) -> tuple[list[DeviceTelemetryViewModel], list[DeviceTelemetryViewModel], list[DeviceTelemetryViewModel]]:
+    """Partition and deduplicate storage telemetry into three distinct operational categories:
+
+    1. physical_usbs: Verified physical USB devices. Multiple partitions on the same
+       physical disk are aggregated into a single physical device record with partition telemetry.
+    2. virtual_disks: Mounted virtual disk images / forensic loop volumes (retained for targeted analysis).
+    3. other_devices: Other removable (e.g. SD cards) or unverified storage.
+
+    Returns:
+        tuple[list[DeviceTelemetryViewModel], list[DeviceTelemetryViewModel], list[DeviceTelemetryViewModel]]:
+        (physical_usbs, virtual_disks, other_devices)
+    """
+    physical_map: dict[str, list[DeviceTelemetry]] = {}
+    virtual_disks: list[DeviceTelemetryViewModel] = []
+    other_devices: list[DeviceTelemetryViewModel] = []
+
+    for v in raw_volumes:
+        cls_val = v.classification.value if hasattr(v.classification, "value") else str(v.classification)
+        is_virt = (
+            v.is_virtual
+            or cls_val == DeviceClassification.VIRTUAL_DISK_IMAGE.value
+            or "virtual" in (v.bus_type or "").lower()
+            or "disk image" in (v.bus_type or "").lower()
+        )
+
+        if is_virt:
+            virtual_disks.append(adapt_telemetry(v))
+        elif (
+            cls_val == DeviceClassification.PHYSICAL_USB.value
+            or (
+                v.bus_type
+                and v.bus_type.upper() == "USB"
+                and not is_virt
+                and cls_val != DeviceClassification.INTERNAL_STORAGE.value
+            )
+        ):
+            parent_key = v.parent_device_id or v.device_id
+            physical_map.setdefault(parent_key, []).append(v)
+        else:
+            other_devices.append(adapt_telemetry(v))
+
+    # Aggregate multi-partition physical USB devices into single physical device records
+    physical_usbs: list[DeviceTelemetryViewModel] = []
+    for parent_key, parts in physical_map.items():
+        if len(parts) == 1:
+            vm = adapt_telemetry(parts[0])
+            vm.parent_device_id = parent_key
+            physical_usbs.append(vm)
+        else:
+            # Multiple partitions on the same physical hardware drive
+            primary = parts[0]
+            part_dicts = [
+                {
+                    "device_id": p.device_id,
+                    "mount_point": p.mount_point or p.device_id,
+                    "volume_label": p.volume_label or "(No Label)",
+                    "filesystem": p.filesystem or "Unknown",
+                    "total_bytes": p.total_bytes or 0,
+                    "free_bytes": p.free_bytes or 0,
+                }
+                for p in parts
+            ]
+            label_summary = f"{primary.volume_label or 'USB Drive'} ({len(parts)} Partitions)"
+            fs_summary = "/".join(sorted(set(p["filesystem"] for p in part_dicts)))
+            total_cap = sum(p["total_bytes"] for p in part_dicts)
+            total_free = sum(p["free_bytes"] for p in part_dicts)
+
+            vm = DeviceTelemetryViewModel(
+                mount_point=primary.mount_point or primary.device_id,
+                device_path=parent_key,
+                volume_label=label_summary,
+                file_system=fs_summary,
+                bus_type="USB",
+                classification=DeviceClassification.PHYSICAL_USB.value,
+                total_bytes=total_cap,
+                total_size_bytes=total_cap,
+                free_bytes=total_free,
+                parent_device_id=parent_key,
+                is_virtual=False,
+                partitions=part_dicts,
+                partition_count=len(parts),
+                device_model=primary.device_model,
+            )
+            physical_usbs.append(vm)
+
+    return physical_usbs, virtual_disks, other_devices
 
 
 # ==============================================================================
@@ -544,23 +653,18 @@ def create_app(
     def dashboard():
         """Dashboard overview: watchdog status, detected USBs, inspection stats, recent audit events."""
         detection_error: Optional[str] = None
-        adapted_volumes: list[DeviceTelemetryViewModel] = []
-        # 1. Enumerate storage devices and filter USB / Removable media
+        physical_usbs: list[DeviceTelemetryViewModel] = []
+        virtual_disks: list[DeviceTelemetryViewModel] = []
+        other_devices: list[DeviceTelemetryViewModel] = []
+        total_storage_devices: int = 0
+
+        # 1. Enumerate storage devices and separate physical USBs, virtual disks, and other storage
         try:
             volumes = hub.detector.get_mounted_volumes()
-            adapted_volumes = [adapt_telemetry(v) for v in volumes]
-            usb_devices = [
-                v
-                for v in adapted_volumes
-                if v.bus_type.upper() == "USB"
-                or v.classification in (
-                    DeviceClassification.USB_MASS_STORAGE.value,
-                    DeviceClassification.UNKNOWN_REMOVABLE.value,
-                )
-            ]
+            physical_usbs, virtual_disks, other_devices = group_and_adapt_storage(volumes)
+            total_storage_devices = len(physical_usbs) + len(virtual_disks) + len(other_devices)
         except Exception as exc:
             logger.error("Device detection failed on dashboard: %s", exc, exc_info=True)
-            usb_devices = []
             detection_error = f"Device detection failed: {exc}"
 
         # 2. Watchdog status
@@ -603,8 +707,12 @@ def create_app(
             "dashboard.html",
             active_page="dashboard",
             watchdog_running=wd_running,
-            usb_devices=usb_devices,
-            total_storage_devices=len(adapted_volumes),
+            usb_devices=physical_usbs,
+            physical_usb_count=len(physical_usbs),
+            virtual_disk_devices=virtual_disks,
+            virtual_disk_count=len(virtual_disks),
+            other_devices=other_devices,
+            total_storage_devices=total_storage_devices,
             inspected_count=inspected_count,
             flagged_count=flagged_count,
             quarantine_count=quarantine_count,
@@ -617,10 +725,14 @@ def create_app(
     def devices():
         """USB Devices & Threat Scanner view: active mounts and scan results."""
         detection_error: Optional[str] = None
+        physical_usbs: list[DeviceTelemetryViewModel] = []
+        virtual_disks: list[DeviceTelemetryViewModel] = []
+        other_devices: list[DeviceTelemetryViewModel] = []
         devices_list: list[DeviceTelemetryViewModel] = []
         try:
             volumes = hub.detector.get_mounted_volumes()
-            devices_list = [adapt_telemetry(v) for v in volumes]
+            physical_usbs, virtual_disks, other_devices = group_and_adapt_storage(volumes)
+            devices_list = physical_usbs + virtual_disks + other_devices
         except Exception as exc:
             logger.error("Storage device detection failed on devices page: %s", exc, exc_info=True)
             detection_error = f"Storage device enumeration failed: {exc}"
@@ -717,6 +829,11 @@ def create_app(
             "devices.html",
             active_page="devices",
             devices_list=devices_list,
+            physical_usb_devices=physical_usbs,
+            physical_usb_count=len(physical_usbs),
+            virtual_disk_devices=virtual_disks,
+            virtual_disk_count=len(virtual_disks),
+            other_devices=other_devices,
             is_scanning=is_scanning,
             scan_report=scan_report_view,
             detection_error=detection_error,

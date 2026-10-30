@@ -318,7 +318,7 @@ def test_web_error_visibility_on_detection_failure(isolated_config: SentinelConf
 
 
 def test_macos_detector_virtual_disk_image_classification() -> None:
-    """Verify virtual disk images are classified as UNKNOWN_REMOVABLE with UNVERIFIED confidence."""
+    """Verify virtual disk images are classified as VIRTUAL_DISK_IMAGE with UNVERIFIED confidence."""
     detector = MacOSDeviceDetector()
     virtual_plist = {
         "Bootable": False,
@@ -337,7 +337,8 @@ def test_macos_detector_virtual_disk_image_classification() -> None:
         "Virtual": True,
     }
     telemetry = detector._parse_diskutil_data(virtual_plist, "/Volumes/NO NAME")
-    assert telemetry.classification == DeviceClassification.UNKNOWN_REMOVABLE
+    assert telemetry.classification == DeviceClassification.VIRTUAL_DISK_IMAGE
+    assert telemetry.is_virtual is True
     assert telemetry.confidence == DetectionConfidence.UNVERIFIED
     assert telemetry.bus_type == "Disk Image (Virtual)"
     assert telemetry.warning is not None

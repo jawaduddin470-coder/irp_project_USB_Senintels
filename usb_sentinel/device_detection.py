@@ -203,18 +203,15 @@ class WindowsDeviceDetector(BaseDeviceDetector):
         return self._monitoring
 
     def get_mounted_volumes(self) -> list[DeviceTelemetry]:
-        """Enumerate all active logical drives and return qualifying USB storage volumes."""
+        """Enumerate all active logical drives and return qualifying storage volumes."""
         results: list[DeviceTelemetry] = []
         drive_letters = self._enumerate_logical_drives()
         for drive in drive_letters:
             try:
                 telemetry = self.get_volume_telemetry(drive)
                 if telemetry is not None:
-                    # Collect USB mass storage or unverified removable drives
-                    if telemetry.classification in (
-                        DeviceClassification.USB_MASS_STORAGE,
-                        DeviceClassification.UNKNOWN_REMOVABLE,
-                    ):
+                    # Collect USB mass storage, virtual disks, and removable drives (exclude internal fixed disks)
+                    if telemetry.classification != DeviceClassification.INTERNAL_STORAGE:
                         results.append(telemetry)
             except Exception:
                 continue
@@ -231,6 +228,9 @@ class WindowsDeviceDetector(BaseDeviceDetector):
 
         # Tier 1 & 2 & 3 Classification
         classification, confidence, backend, warning, model_name, bus_type = self._classify_drive(drive)
+
+        parent_id = drive
+        is_virt = classification == DeviceClassification.VIRTUAL_DISK_IMAGE
 
         # Volume Attributes Query (Label, Filesystem, Serial, Free Space)
         label, fs_name, vol_serial = self._get_volume_information(mount_point)
@@ -251,6 +251,8 @@ class WindowsDeviceDetector(BaseDeviceDetector):
             warning=warning,
             device_model=model_name,
             bus_type=bus_type,
+            parent_device_id=parent_id,
+            is_virtual=is_virt,
         )
 
     def _classify_drive(
@@ -265,9 +267,23 @@ class WindowsDeviceDetector(BaseDeviceDetector):
         wmi_res = self._query_wmi_physical_disk(drive)
         if wmi_res is not None:
             is_usb, model, pnp_id, bus_type_str = wmi_res
+            is_virt = bool(
+                "virtual" in str(model or "").lower()
+                or "vhd" in str(model or "").lower()
+                or "virtual" in str(pnp_id or "").lower()
+            )
+            if is_virt:
+                return (
+                    DeviceClassification.VIRTUAL_DISK_IMAGE,
+                    DetectionConfidence.DEFINITIVE_WMI_USB,
+                    "WMI",
+                    "Virtual disk image mounted under Windows.",
+                    model,
+                    "Virtual Disk",
+                )
             if is_usb:
                 return (
-                    DeviceClassification.USB_MASS_STORAGE,
+                    DeviceClassification.PHYSICAL_USB,
                     DetectionConfidence.DEFINITIVE_WMI_USB,
                     "WMI",
                     None,
@@ -277,7 +293,7 @@ class WindowsDeviceDetector(BaseDeviceDetector):
             else:
                 # WMI explicitly confirmed non-USB physical interface (e.g. IDE, NVMe, SATA)
                 return (
-                    DeviceClassification.FIXED_VOLUME,
+                    DeviceClassification.INTERNAL_STORAGE,
                     DetectionConfidence.DEFINITIVE_WMI_USB,
                     "WMI",
                     None,
@@ -291,7 +307,7 @@ class WindowsDeviceDetector(BaseDeviceDetector):
             bus_type_num = ioctl_res
             if bus_type_num == BusTypeUsb:
                 return (
-                    DeviceClassification.USB_MASS_STORAGE,
+                    DeviceClassification.PHYSICAL_USB,
                     DetectionConfidence.HIGH_IOCTL_USB,
                     "IOCTL",
                     None,
@@ -300,7 +316,7 @@ class WindowsDeviceDetector(BaseDeviceDetector):
                 )
             elif bus_type_num in (BusTypeSata, BusTypeNvme, BusTypeScsi, BusTypeAta, BusTypeRAID):
                 return (
-                    DeviceClassification.FIXED_VOLUME,
+                    DeviceClassification.INTERNAL_STORAGE,
                     DetectionConfidence.HIGH_IOCTL_USB,
                     "IOCTL",
                     None,
@@ -312,19 +328,19 @@ class WindowsDeviceDetector(BaseDeviceDetector):
         drive_type = self._get_drive_type(normalize_mount_point(drive))
         if drive_type == DRIVE_REMOVABLE:
             return (
-                DeviceClassification.UNKNOWN_REMOVABLE,
+                DeviceClassification.OTHER_REMOVABLE,
                 DetectionConfidence.HEURISTIC_REMOVABLE,
                 "GET_DRIVE_TYPE",
-                "Degraded detection fallback: DRIVE_REMOVABLE; fixed USB drives cannot be confirmed in this mode.",
+                "Degraded detection fallback: DRIVE_REMOVABLE; physical USB controller cannot be confirmed in this mode.",
                 None,
                 "REMOVABLE",
             )
         elif drive_type == DRIVE_FIXED:
             return (
-                DeviceClassification.FIXED_VOLUME,
+                DeviceClassification.INTERNAL_STORAGE,
                 DetectionConfidence.HEURISTIC_REMOVABLE,
                 "GET_DRIVE_TYPE",
-                "Degraded detection fallback: DRIVE_FIXED; internal drive or unverified USB disk.",
+                "Degraded detection fallback: DRIVE_FIXED; internal drive or unverified disk.",
                 None,
                 "FIXED",
             )
@@ -712,22 +728,23 @@ class MacOSDeviceDetector(BaseDeviceDetector):
             except Exception:
                 pass
 
-        # Filter to USB mass storage and removable volumes (avoiding internal OS root drives like /)
+        # Filter out internal OS root drives like / and internal fixed disks
         qualifying = [
             t for t in results
-            if t.classification in (
-                DeviceClassification.USB_MASS_STORAGE,
-                DeviceClassification.UNKNOWN_REMOVABLE,
-            )
+            if t.classification != DeviceClassification.INTERNAL_STORAGE
         ]
 
-        # Sort so USB Mass Storage devices appear first, followed by removable volumes
-        qualifying.sort(
-            key=lambda t: (
-                0 if t.classification == DeviceClassification.USB_MASS_STORAGE else 1,
-                (t.volume_label or "").lower(),
-            )
-        )
+        # Sort so Physical USB devices appear first, followed by virtual disk images, then other removable
+        def _sort_key(t: DeviceTelemetry) -> tuple[int, str]:
+            if t.classification == DeviceClassification.PHYSICAL_USB:
+                order = 0
+            elif t.classification == DeviceClassification.VIRTUAL_DISK_IMAGE:
+                order = 1
+            else:
+                order = 2
+            return (order, (t.volume_label or "").lower())
+
+        qualifying.sort(key=_sort_key)
         return qualifying
 
     def get_volume_telemetry(self, drive_or_path: str) -> Optional[DeviceTelemetry]:
@@ -774,42 +791,74 @@ class MacOSDeviceDetector(BaseDeviceDetector):
 
     def _parse_diskutil_data(self, data: dict[str, Any], path_or_id: str) -> DeviceTelemetry:
         """Parse diskutil property dictionary into typed DeviceTelemetry."""
-        bus_proto = str(data.get("BusProtocol", "")).strip()
-        is_usb = bus_proto.upper() == "USB"
+        device_id = str(data.get("DeviceIdentifier") or os.path.basename(path_or_id) or path_or_id)
+        parent_id = str(data.get("ParentWholeDisk") or device_id)
+
+        # Inspect parent whole disk if available and different from the partition
+        parent_data: Optional[dict[str, Any]] = None
+        if parent_id and parent_id != device_id:
+            parent_data = self._query_diskutil_plist(parent_id)
+
+        bus_proto = str(data.get("BusProtocol") or (parent_data.get("BusProtocol") if parent_data else "") or "").strip()
+        device_tree = str(data.get("DeviceTreePath") or (parent_data.get("DeviceTreePath") if parent_data else "") or "").lower()
+        media_name = str(data.get("MediaName") or (parent_data.get("MediaName") if parent_data else "") or "").lower()
+        registry_name = str(data.get("IORegistryEntryName") or (parent_data.get("IORegistryEntryName") if parent_data else "") or "").lower()
+        virt_or_phys = str(data.get("VirtualOrPhysical") or (parent_data.get("VirtualOrPhysical") if parent_data else "") or "").strip().lower()
+
         is_virtual = bool(
             data.get("Virtual")
-            or str(data.get("VirtualOrPhysical", "")).lower() == "virtual"
+            or (parent_data and parent_data.get("Virtual"))
+            or virt_or_phys == "virtual"
             or bus_proto.lower() == "disk image"
+            or "disk image" in media_name
+            or "disk image" in registry_name
+            or "apple disk image" in registry_name
         )
+
+        is_internal = bool(
+            data.get("Internal", False)
+            or data.get("OSInternalMedia", False)
+            or (parent_data and parent_data.get("Internal", False))
+            or (parent_data and parent_data.get("OSInternalMedia", False))
+        )
+
         is_removable = bool(
             data.get("RemovableMedia")
             or data.get("Removable")
             or data.get("Ejectable")
+            or data.get("RemovableMediaOrExternalDevice")
+            or (parent_data and parent_data.get("RemovableMedia"))
+            or (parent_data and parent_data.get("Ejectable"))
         )
-        is_internal = bool(data.get("Internal", False))
 
         # Do NOT infer physical USB hardware from a mount path alone.
         # Only verify USB if the underlying hardware bus protocol is explicitly USB and non-virtual.
-        if is_usb and not is_virtual:
-            classification = DeviceClassification.USB_MASS_STORAGE
+        is_usb = (
+            (bus_proto.upper() == "USB" or "usb" in device_tree)
+            and not is_virtual
+            and not is_internal
+        )
+
+        if is_usb:
+            classification = DeviceClassification.PHYSICAL_USB
             confidence = DetectionConfidence.HIGH_IOCTL_USB
             bus_type = "USB"
             warning = None
-        elif is_virtual or bus_proto.lower() == "disk image":
-            classification = DeviceClassification.UNKNOWN_REMOVABLE
+        elif is_virtual:
+            classification = DeviceClassification.VIRTUAL_DISK_IMAGE
             confidence = DetectionConfidence.UNVERIFIED
             bus_type = "Disk Image (Virtual)"
             warning = "Virtual disk image attached. Physical USB controller cannot be confirmed from image alone."
-        elif is_removable and not is_internal:
-            classification = DeviceClassification.UNKNOWN_REMOVABLE
-            confidence = DetectionConfidence.HEURISTIC_REMOVABLE
-            bus_type = bus_proto or "REMOVABLE"
-            warning = "Removable storage detected without definitive USB bus confirmation."
         elif is_internal:
-            classification = DeviceClassification.FIXED_VOLUME
+            classification = DeviceClassification.INTERNAL_STORAGE
             confidence = DetectionConfidence.UNVERIFIED
             bus_type = bus_proto or "INTERNAL"
             warning = "Internal fixed disk; not an external USB device."
+        elif is_removable and not is_internal:
+            classification = DeviceClassification.OTHER_REMOVABLE
+            confidence = DetectionConfidence.HEURISTIC_REMOVABLE
+            bus_type = bus_proto or "REMOVABLE"
+            warning = "Removable storage detected without definitive USB bus confirmation."
         else:
             classification = DeviceClassification.UNKNOWN
             confidence = DetectionConfidence.UNVERIFIED
@@ -817,7 +866,6 @@ class MacOSDeviceDetector(BaseDeviceDetector):
             warning = "Unable to establish storage bus protocol."
 
         mount_point = data.get("MountPoint") or path_or_id
-        device_id = data.get("DeviceIdentifier") or mount_point
         volume_label = data.get("VolumeName") or os.path.basename(mount_point) or "(No Label)"
         filesystem = data.get("FilesystemName") or data.get("FilesystemType") or "Unknown"
 
@@ -831,6 +879,8 @@ class MacOSDeviceDetector(BaseDeviceDetector):
 
         volume_serial = data.get("VolumeUUID")
         device_model = data.get("MediaName") or data.get("IORegistryEntryName")
+        if not device_model and parent_data:
+            device_model = parent_data.get("MediaName") or parent_data.get("IORegistryEntryName")
 
         return DeviceTelemetry(
             device_id=device_id,
@@ -847,6 +897,8 @@ class MacOSDeviceDetector(BaseDeviceDetector):
             warning=warning,
             device_model=device_model,
             bus_type=bus_type,
+            parent_device_id=parent_id,
+            is_virtual=is_virtual,
         )
 
     def _statvfs_capacity(self, path: str) -> tuple[Optional[int], Optional[int]]:
@@ -864,7 +916,7 @@ class MacOSDeviceDetector(BaseDeviceDetector):
         total_bytes, free_bytes = self._statvfs_capacity(path)
         is_vol = str(path).startswith("/Volumes")
         classification = (
-            DeviceClassification.UNKNOWN_REMOVABLE if is_vol else DeviceClassification.FIXED_VOLUME
+            DeviceClassification.OTHER_REMOVABLE if is_vol else DeviceClassification.INTERNAL_STORAGE
         )
         return DeviceTelemetry(
             device_id=path,
@@ -878,6 +930,8 @@ class MacOSDeviceDetector(BaseDeviceDetector):
             confidence=DetectionConfidence.UNVERIFIED,
             detection_backend="POSIX_STATVFS",
             bus_type="UNKNOWN",
+            parent_device_id=path,
+            is_virtual=False,
         )
 
     def start_event_monitoring(self, event_callback: Callable[[RawDeviceEvent], None]) -> None:

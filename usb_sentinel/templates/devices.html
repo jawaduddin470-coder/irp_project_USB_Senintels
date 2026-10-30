@@ -79,7 +79,13 @@
             </svg>
             <div>
                 <h2 class="panel-title">Active Mounts &amp; Storage Telemetry</h2>
-                <div class="panel-subtitle">Enumerate storage volumes and classify hardware bus connections</div>
+                <div class="panel-subtitle">
+                    Enumerate storage volumes and classify hardware bus connections &bull;
+                    <span class="badge badge-success" style="font-size: 10px;">Physical USB: {{ physical_usb_count }}</span>
+                    {% if virtual_disk_count > 0 %}
+                    <span class="badge badge-neutral" style="font-size: 10px;">Virtual Images: {{ virtual_disk_count }}</span>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </div>
@@ -101,12 +107,22 @@
             <tbody>
                 {% for dev in devices_list %}
                 <tr>
-                    <td class="mono"><strong>{{ dev.mount_point or dev.device_path }}</strong></td>
+                    <td class="mono">
+                        <strong>{{ dev.mount_point or dev.device_path }}</strong>
+                        {% if dev.partition_count > 1 %}
+                            <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">
+                                {{ dev.partition_count }} Partitions:
+                                {% for p in dev.partitions %}
+                                    <span class="badge badge-neutral" style="font-size: 9px;">{{ p.mount_point }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </td>
                     <td>{{ dev.volume_label or '(No Label)' }}</td>
                     <td><span class="badge badge-neutral">{{ dev.file_system or 'Unknown' }}</span></td>
-                    <td><span class="badge badge-info">{{ dev.bus_type }}</span></td>
+                    <td><span class="badge badge-{% if dev.classification in ('PHYSICAL_USB', 'USB_MASS_STORAGE') %}info{% else %}neutral{% endif %}">{{ dev.bus_type }}</span></td>
                     <td>
-                        <span class="badge badge-{% if dev.classification == 'USB_MASS_STORAGE' %}success{% elif dev.classification in ('INTERNAL_FIXED_DRIVE', 'FIXED_VOLUME') %}neutral{% else %}warning{% endif %}">
+                        <span class="badge badge-{% if dev.classification in ('PHYSICAL_USB', 'USB_MASS_STORAGE') %}success{% elif dev.classification == 'VIRTUAL_DISK_IMAGE' %}neutral{% elif dev.classification in ('INTERNAL_FIXED_DRIVE', 'FIXED_VOLUME', 'INTERNAL_STORAGE') %}neutral{% else %}warning{% endif %}">
                             {{ dev.classification }}
                         </span>
                     </td>

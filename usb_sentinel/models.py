@@ -41,11 +41,30 @@ def utc_now() -> datetime:
 class DeviceClassification(str, Enum):
     """Classification of an inspected storage volume."""
 
-    USB_MASS_STORAGE = "USB_MASS_STORAGE"
-    UNKNOWN_REMOVABLE = "UNKNOWN_REMOVABLE"
-    FIXED_VOLUME = "FIXED_VOLUME"
-    OPTICAL_OR_OTHER = "OPTICAL_OR_OTHER"
+    PHYSICAL_USB = "PHYSICAL_USB"
+    VIRTUAL_DISK_IMAGE = "VIRTUAL_DISK_IMAGE"
+    INTERNAL_STORAGE = "INTERNAL_STORAGE"
+    OTHER_REMOVABLE = "OTHER_REMOVABLE"
     UNKNOWN = "UNKNOWN"
+
+    # Backward compatibility aliases for existing codebase references
+    USB_MASS_STORAGE = "PHYSICAL_USB"
+    FIXED_VOLUME = "INTERNAL_STORAGE"
+    UNKNOWN_REMOVABLE = "OTHER_REMOVABLE"
+    OPTICAL_OR_OTHER = "OTHER_REMOVABLE"
+
+    @classmethod
+    def _missing_(cls, value: object) -> DeviceClassification:
+        s = str(value).upper().strip()
+        if s in ("USB_MASS_STORAGE", "PHYSICAL_USB"):
+            return cls.PHYSICAL_USB
+        if s in ("FIXED_VOLUME", "INTERNAL_STORAGE", "INTERNAL_FIXED_DRIVE"):
+            return cls.INTERNAL_STORAGE
+        if s in ("VIRTUAL_DISK_IMAGE", "VIRTUAL_DISK", "DISK_IMAGE"):
+            return cls.VIRTUAL_DISK_IMAGE
+        if s in ("UNKNOWN_REMOVABLE", "OTHER_REMOVABLE", "OPTICAL_OR_OTHER"):
+            return cls.OTHER_REMOVABLE
+        return cls.UNKNOWN
 
 
 class DetectionConfidence(str, Enum):
@@ -151,6 +170,17 @@ class DeviceTelemetry:
     warning: Optional[str] = None              # e.g., degraded detection mode warning
     device_model: Optional[str] = None         # Hardware product model name (non-sensitive)
     bus_type: Optional[str] = None             # Physical interface bus type (e.g. "USB", "NVMe")
+    parent_device_id: Optional[str] = None     # Identifier of physical whole disk (e.g. "disk6" or "\\\\.\\PhysicalDrive1")
+    is_virtual: bool = False                   # True if volume is a virtual disk image or loop mount
+
+    @property
+    def is_physical_usb(self) -> bool:
+        """True if the device is a verified physical USB mass storage device."""
+        return (
+            self.classification == DeviceClassification.PHYSICAL_USB
+            and not self.is_virtual
+            and (self.bus_type or "").upper() == "USB"
+        )
 
 
 @dataclass(frozen=True)

@@ -486,7 +486,11 @@ def test_watchdog_ignores_non_system_internal_fixed_disk(
         assert watchdog.get_session("D:") is None
         events = audit_ledger.read_all_events()
         assert any(
-            e.event_type == AuditEventType.SYSTEM_WARNING and "classification=FIXED_VOLUME" in str(e.details)
+            e.event_type == AuditEventType.SYSTEM_WARNING
+            and (
+                "classification=FIXED_VOLUME" in str(e.details)
+                or "classification=INTERNAL_STORAGE" in str(e.details)
+            )
             for e in events
         )
 
